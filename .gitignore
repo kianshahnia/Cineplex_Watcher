@@ -1,0 +1,38 @@
+# Environment and secrets
+.env
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Node / Next.js
+node_modules/
+.next/
+.vercel/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes (local)
+pgdata/
+redisdata/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Project-specific
+test_scraper.py
+CLAUDE.local.md
