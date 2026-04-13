@@ -17,7 +17,7 @@ dependencies = [
     # HTTP client
     "httpx>=0.28,<1",
     # Config / validation
-    "pydantic>=2.10,<3",
+    "pydantic[email]>=2.10,<3",
     "pydantic-settings>=2.7,<3",
     # Auth
     "pyjwt>=2.10,<3",

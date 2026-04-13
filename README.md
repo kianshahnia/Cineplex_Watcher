@@ -61,7 +61,15 @@ npm run dev
 
 ## Project status
 
-This is a work in progress. The backend foundation is in place (models, migrations, Docker setup, Celery config). The API endpoints, real-time WebSocket layer, notification integrations, and frontend are still being built out.
+**Phase 1 — Complete.** Backend foundation: SQLAlchemy models, Alembic migrations, Docker Compose setup, Celery config, and a proof-of-concept Cineplex API scraper.
+
+**Phase 2 — Complete.** Full REST API:
+- Passwordless magic link auth (JWT session cookie, `/auth/login`, `/auth/verify`, `/auth/me`, `/auth/logout`)
+- Watch CRUD (`POST /watches`, `POST /watches/{id}/seats`, `GET /watches`, `DELETE /watches/{id}`)
+- Showtime seat map endpoint — fetches layout from Cineplex, caches it, merges with live availability (`GET /showtimes/{theatre_id}/{showtime_id}`)
+- URL parser utility (`POST /showtimes/parse-url`)
+
+**Up next — Phase 3:** Redis pub/sub, WebSocket real-time updates, email/SMS/push notifications.
 
 ## License
 
