@@ -36,3 +36,4 @@ redisdata/
 # Project-specific
 test_scraper.py
 CLAUDE.local.md
+docs/context.md

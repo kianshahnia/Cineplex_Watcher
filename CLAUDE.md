@@ -1,5 +1,8 @@
 # Cineplex Seat Watcher
 
+## Project Context
+@docs/context.md
+--- 
 ## Project overview
 
 A full-stack web application that monitors Cineplex movie theater seat availability in real time. Users paste a Cineplex showtime URL, see an interactive seat map, select specific seats (or all seats) to track, and receive instant notifications (email, SMS, browser push) when a watched seat becomes available.

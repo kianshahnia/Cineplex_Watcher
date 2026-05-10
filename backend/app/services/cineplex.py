@@ -1,6 +1,7 @@
 """Cineplex API client — fetch seat layout, availability, and parse URLs."""
 
 import re
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import structlog
@@ -18,22 +19,60 @@ CINEPLEX_API_BASE = "https://apis.cineplex.com/prod/ticketing/api/v1"
 #   https://apis.cineplex.com/prod/ticketing/api/v1/theatre/1405/showtime/528426/...
 _API_URL_RE = re.compile(r"theatre/(\d+)/showtime/(\d+)")
 
+# The public preview page uses both names interchangeably depending on entry point:
+# the user-pasted URL typically has `theatreId`, while the page's internal router
+# rewrites it to `locationId` after navigation. Accept either.
+_PREVIEW_THEATRE_PARAMS = ("theatreId", "locationId")
+_PREVIEW_SHOWTIME_PARAM = "showtimeId"
+
 
 def parse_cineplex_url(url: str) -> tuple[int, int]:
     """Extract (theatre_id, showtime_id) from a Cineplex URL.
 
-    Supports the API URL format.  Raises ValueError if no IDs can be found.
+    Accepts two formats:
+
+    1. The public ticketing preview URL a user pastes from their browser::
+
+           https://www.cineplex.com/ticketing/preview?theatreId=1151&showtimeId=88110&dbox=true
+
+       The `theatreId` parameter is also accepted as `locationId` (the page's
+       internal router rewrites between them).
+
+    2. The Cineplex API URL itself, useful for dev/testing::
+
+           https://apis.cineplex.com/prod/ticketing/api/v1/theatre/1405/showtime/528426/seat-availability
 
     Returns:
         A tuple of (theatre_id, showtime_id).
+
+    Raises:
+        ValueError: if neither format can be matched.
     """
+    parsed = urlparse(url.strip())
+    if parsed.query:
+        params = parse_qs(parsed.query)
+        showtime_values = params.get(_PREVIEW_SHOWTIME_PARAM)
+        theatre_values = next(
+            (params[name] for name in _PREVIEW_THEATRE_PARAMS if name in params),
+            None,
+        )
+        if showtime_values and theatre_values:
+            try:
+                return int(theatre_values[0]), int(showtime_values[0])
+            except ValueError:
+                raise ValueError(
+                    "Cineplex preview URL has non-numeric theatreId or showtimeId."
+                )
+
     match = _API_URL_RE.search(url)
     if match:
         return int(match.group(1)), int(match.group(2))
 
     raise ValueError(
         "Could not extract theatre and showtime IDs from the URL. "
-        "Expected a Cineplex API URL containing '.../theatre/{id}/showtime/{id}/...'."
+        "Expected either a Cineplex preview URL "
+        "('.../ticketing/preview?theatreId=...&showtimeId=...') "
+        "or an API URL ('.../theatre/{id}/showtime/{id}/...')."
     )
 
 

@@ -90,7 +90,12 @@ async def parse_url(body: ParseUrlRequest) -> ParseUrlResponse:
     """Parse a user-pasted Cineplex URL and return the IDs the frontend needs
     to call ``GET /showtimes/{theatre_id}/{showtime_id}``.
 
-    Accepts the Cineplex API URL format::
+    Accepts either the public ticketing preview URL (the one a user actually
+    pastes from their browser)::
+
+        https://www.cineplex.com/ticketing/preview?theatreId=1151&showtimeId=88110&dbox=true
+
+    or the Cineplex API URL (useful for dev/testing)::
 
         https://apis.cineplex.com/prod/ticketing/api/v1/theatre/1405/showtime/528426/seat-availability
     """
