@@ -1,0 +1,40 @@
+.mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--platinum);
+}
+
+.lockup {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.name {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--platinum);
+}
+
+.sm .name { font-size: 13px; }
+.md .name { font-size: 18px; }
+
+.divider {
+  width: 1px;
+  height: 11px;
+  background: var(--hair-strong);
+  align-self: center;
+}
+
+.tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--silver-dim);
+}
+
+.md .tag { font-size: 11px; }

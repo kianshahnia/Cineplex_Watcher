@@ -1,0 +1,39 @@
+.main {
+  padding-top: clamp(40px, 6vw, 80px);
+  padding-bottom: clamp(64px, 10vw, 128px);
+  display: flex;
+  flex-direction: column;
+  gap: clamp(40px, 5vw, 64px);
+}
+
+.mapCard {
+  position: relative;
+  padding: clamp(28px, 4vw, 52px) clamp(20px, 3vw, 36px);
+  background: linear-gradient(
+    180deg,
+    rgba(22, 31, 51, 0.55) 0%,
+    rgba(11, 19, 34, 0.65) 100%
+  );
+  border: 1px solid var(--hair-strong);
+  border-radius: 10px;
+  box-shadow: var(--depth-card);
+  animation: rise 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: 80ms;
+}
+
+.mapCard::before {
+  content: "";
+  position: absolute;
+  inset: -1px -1px auto -1px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--brass) 38%,
+    var(--brass-soft) 50%,
+    var(--brass) 62%,
+    transparent 100%
+  );
+  opacity: 0.4;
+  pointer-events: none;
+}

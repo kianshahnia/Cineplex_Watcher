@@ -1,0 +1,519 @@
+/* --- live updates bar (above seat map) ------------------------------- */
+
+.liveBar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 4px 0 18px;
+}
+
+.liveLabel {
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--silver-dim);
+}
+
+.liveRule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    var(--hair-strong) 0%,
+    var(--hair) 60%,
+    transparent 100%
+  );
+  max-width: 240px;
+}
+
+/* --- positioned container so the ticker can sit on top of the map --- */
+
+.mapWrap {
+  position: relative;
+}
+
+/* --- action panel (below) ------------------------------------------- */
+
+.panel {
+  position: relative;
+  margin-top: clamp(28px, 4vw, 48px);
+  padding: clamp(28px, 4vw, 44px);
+  background: linear-gradient(
+    180deg,
+    rgba(22, 31, 51, 0.55) 0%,
+    rgba(11, 19, 34, 0.65) 100%
+  );
+  border: 1px solid var(--hair-strong);
+  border-radius: 10px;
+  box-shadow: var(--depth-card);
+  animation: rise 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: 120ms;
+}
+
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: -1px -1px auto -1px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--brass) 38%,
+    var(--brass-soft) 50%,
+    var(--brass) 62%,
+    transparent 100%
+  );
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* --- header row -------------------------------------------------------- */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding-bottom: clamp(20px, 3vw, 28px);
+  border-bottom: 1px solid var(--hair);
+  margin-bottom: clamp(20px, 3vw, 28px);
+}
+
+.kicker {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--brass);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--hair-brass);
+  width: fit-content;
+}
+
+.statusFlag {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--silver);
+}
+
+.flagDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--brass);
+  animation: liveDot 2.6s ease-out infinite;
+}
+
+/* --- two-column body --------------------------------------------------- */
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: clamp(28px, 4vw, 56px);
+  align-items: start;
+}
+
+.selectionCol {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.controlsCol {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.watchedBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--hair);
+}
+
+.smallLabel {
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--silver-dim);
+}
+
+/* --- big numeral ------------------------------------------------------- */
+
+.numeralBlock {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+}
+
+.numeral {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(48px, 7vw, 88px);
+  line-height: 1;
+  color: var(--mist);
+  letter-spacing: -0.02em;
+  font-variation-settings: "opsz" 144;
+  font-variant-numeric: tabular-nums;
+}
+
+.numeralLabel {
+  font-family: var(--font-italic);
+  font-style: italic;
+  font-size: clamp(15px, 1.4vw, 18px);
+  color: var(--silver);
+  padding-bottom: 6px;
+}
+
+/* --- chip list of seat labels ----------------------------------------- */
+
+.chipList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.seatChip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 4px 9px;
+  border-radius: 3px;
+  background: rgba(200, 168, 107, 0.10);
+  color: var(--brass-soft);
+  border: 1px solid var(--hair-brass);
+}
+
+.seatChipWatched {
+  background: rgba(200, 168, 107, 0.22);
+  color: var(--mist);
+  border-color: var(--brass);
+}
+
+.hint {
+  margin: 4px 0 0;
+  font-family: var(--font-sans);
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--silver);
+  max-width: 38ch;
+}
+
+/* --- custom checkbox toggle ------------------------------------------ */
+
+.toggle {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid var(--hair-strong);
+  border-radius: 8px;
+  background: rgba(6, 10, 20, 0.45);
+  cursor: pointer;
+  transition: border-color 200ms ease, background 200ms ease;
+}
+
+.toggle:hover {
+  border-color: var(--brass-dim);
+}
+
+.toggleDisabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.toggleDisabled:hover {
+  border-color: var(--hair-strong);
+}
+
+.toggleInput {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toggleBox {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid var(--hair-strong);
+  background: rgba(6, 10, 20, 0.6);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+  transition: background 200ms ease, border-color 200ms ease;
+}
+
+.toggleCheck {
+  width: 10px;
+  height: 6px;
+  border-left: 2px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+  transform: rotate(-45deg) scale(0);
+  margin-top: -2px;
+  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.toggleInput:checked ~ .toggleBox {
+  background: var(--brass);
+  border-color: var(--brass);
+}
+
+.toggleInput:checked ~ .toggleBox .toggleCheck {
+  transform: rotate(-45deg) scale(1);
+}
+
+.toggleInput:focus-visible ~ .toggleBox {
+  outline: 1px solid var(--brass);
+  outline-offset: 3px;
+}
+
+.toggleCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.toggleTitle {
+  font-family: var(--font-sans);
+  font-size: 14.5px;
+  color: var(--mist);
+  font-weight: 500;
+}
+
+.toggleSub {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--silver);
+  line-height: 1.5;
+}
+
+/* --- buttons --------------------------------------------------------- */
+
+.primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 54px;
+  padding: 0 22px;
+  background: var(--platinum);
+  color: var(--ink);
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 14px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition:
+    background 200ms ease,
+    transform 120ms ease,
+    box-shadow 220ms ease;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.8) inset,
+    0 0 0 0 var(--brass-glow);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--mist);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 0 0 4px var(--brass-glow);
+}
+
+.primary:hover:not(:disabled) .arrow {
+  transform: translateX(3px);
+}
+
+.primary:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.arrow {
+  font-size: 16px;
+  transition: transform 200ms ease;
+}
+
+.secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 48px;
+  padding: 0 18px;
+  background: transparent;
+  color: var(--silver);
+  border: 1px solid var(--hair-strong);
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 12.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition:
+    color 200ms ease,
+    border-color 200ms ease;
+}
+
+.secondary:hover:not(:disabled) {
+  color: #d97676;
+  border-color: rgba(217, 118, 118, 0.45);
+}
+
+.secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* --- signed-out / loading prompts ----------------------------------- */
+
+.signedOut {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border: 1px solid var(--hair-strong);
+  border-radius: 8px;
+  background: rgba(6, 10, 20, 0.45);
+}
+
+.signedOutLede {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--silver);
+}
+
+.signedOutCta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 48px;
+  padding: 0 18px;
+  background: transparent;
+  color: var(--platinum);
+  border: 1px solid var(--platinum);
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition:
+    background 200ms ease,
+    color 200ms ease;
+  width: fit-content;
+}
+
+.signedOutCta:hover {
+  background: var(--platinum);
+  color: var(--ink);
+}
+
+.signedOutCta:hover .arrow {
+  transform: translateX(3px);
+}
+
+.loadingHint {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--silver-dim);
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--hair-strong);
+  border-top-color: var(--brass);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+/* --- success / error banners --------------------------------------- */
+
+.success,
+.error {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 12px 16px;
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--platinum);
+}
+
+.success {
+  border: 1px solid rgba(200, 168, 107, 0.32);
+  border-left: 2px solid var(--brass);
+  background: rgba(200, 168, 107, 0.06);
+}
+
+.error {
+  border: 1px solid rgba(217, 118, 118, 0.32);
+  border-left: 2px solid #d97676;
+  background: rgba(216, 102, 102, 0.06);
+}
+
+.successTag,
+.errorTag {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.successTag { color: var(--brass); }
+.errorTag   { color: #d97676; }
+
+/* --- responsive ----------------------------------------------------- */
+
+@media (max-width: 880px) {
+  .grid {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+}
+
+@media (max-width: 520px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+}

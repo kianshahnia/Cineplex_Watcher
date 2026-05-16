@@ -1,0 +1,173 @@
+{
+  "_comment": "TEST FIXTURE — raw Cineplex API payloads for a fictional 72-seat auditorium. This file demonstrates the exact JSON shape the frontend converts into a SeatMapLayout (see ./buildLayout.ts). Two sibling responses are inlined here for convenience: 'seatLayout' mirrors GET /theatre/{t}/showtime/{s}/seats, and 'seatAvailability' mirrors GET /theatre/{t}/showtime/{s}/seat-availability. Remove the entire test/ folder before shipping.",
+  "seatLayout": {
+    "totalRows": 8,
+    "totalColumns": 14,
+    "maxSeatSelectionAllowed": 12,
+    "standardSeats": {
+      "areaWidth": 14,
+      "columnCount": 14,
+      "rowCount": 8,
+      "rows": [
+        {
+          "number": 1,
+          "physicalNumber": 1,
+          "label": "A",
+          "seats": [
+            { "id": "1_1_1", "column": 4,  "columnPhysicalNumber": 1, "label": "A1", "type": "Standard" },
+            { "id": "1_1_2", "column": 5,  "columnPhysicalNumber": 2, "label": "A2", "type": "Standard" },
+            { "id": "1_1_3", "column": 6,  "columnPhysicalNumber": 3, "label": "A3", "type": "Standard" },
+            { "id": "1_1_4", "column": 7,  "columnPhysicalNumber": 4, "label": "A4", "type": "Standard" },
+            { "id": "1_1_5", "column": 8,  "columnPhysicalNumber": 5, "label": "A5", "type": "Standard" },
+            { "id": "1_1_6", "column": 9,  "columnPhysicalNumber": 6, "label": "A6", "type": "Standard" },
+            { "id": "1_1_7", "column": 10, "columnPhysicalNumber": 7, "label": "A7", "type": "Standard" },
+            { "id": "1_1_8", "column": 11, "columnPhysicalNumber": 8, "label": "A8", "type": "Standard" }
+          ]
+        },
+        {
+          "number": 2,
+          "physicalNumber": 2,
+          "label": "B",
+          "seats": [
+            { "id": "1_2_1",  "column": 3,  "columnPhysicalNumber": 1,  "label": "B1",  "type": "Standard" },
+            { "id": "1_2_2",  "column": 4,  "columnPhysicalNumber": 2,  "label": "B2",  "type": "Standard" },
+            { "id": "1_2_3",  "column": 5,  "columnPhysicalNumber": 3,  "label": "B3",  "type": "Standard" },
+            { "id": "1_2_4",  "column": 6,  "columnPhysicalNumber": 4,  "label": "B4",  "type": "Standard" },
+            { "id": "1_2_5",  "column": 7,  "columnPhysicalNumber": 5,  "label": "B5",  "type": "Standard" },
+            { "id": "1_2_6",  "column": 8,  "columnPhysicalNumber": 6,  "label": "B6",  "type": "Standard" },
+            { "id": "1_2_7",  "column": 9,  "columnPhysicalNumber": 7,  "label": "B7",  "type": "Standard" },
+            { "id": "1_2_8",  "column": 10, "columnPhysicalNumber": 8,  "label": "B8",  "type": "Standard" },
+            { "id": "1_2_9",  "column": 11, "columnPhysicalNumber": 9,  "label": "B9",  "type": "Standard" },
+            { "id": "1_2_10", "column": 12, "columnPhysicalNumber": 10, "label": "B10", "type": "Standard" }
+          ]
+        },
+        {
+          "number": 3,
+          "physicalNumber": 3,
+          "label": "C",
+          "seats": [
+            { "id": "1_3_1",  "column": 2,  "columnPhysicalNumber": 1,  "label": "C1",  "type": "Standard" },
+            { "id": "1_3_2",  "column": 3,  "columnPhysicalNumber": 2,  "label": "C2",  "type": "Standard" },
+            { "id": "1_3_3",  "column": 4,  "columnPhysicalNumber": 3,  "label": "C3",  "type": "Standard" },
+            { "id": "1_3_4",  "column": 5,  "columnPhysicalNumber": 4,  "label": "C4",  "type": "Standard" },
+            { "id": "1_3_5",  "column": 6,  "columnPhysicalNumber": 5,  "label": "C5",  "type": "Standard" },
+            { "id": "1_3_6",  "column": 7,  "columnPhysicalNumber": 6,  "label": "C6",  "type": "Wheelchair" },
+            { "id": "1_3_7",  "column": 8,  "columnPhysicalNumber": 7,  "label": "C7",  "type": "Companion" },
+            { "id": "1_3_8",  "column": 9,  "columnPhysicalNumber": 8,  "label": "C8",  "type": "Standard" },
+            { "id": "1_3_9",  "column": 10, "columnPhysicalNumber": 9,  "label": "C9",  "type": "Standard" },
+            { "id": "1_3_10", "column": 11, "columnPhysicalNumber": 10, "label": "C10", "type": "Standard" },
+            { "id": "1_3_11", "column": 12, "columnPhysicalNumber": 11, "label": "C11", "type": "Standard" },
+            { "id": "1_3_12", "column": 13, "columnPhysicalNumber": 12, "label": "C12", "type": "Standard" }
+          ]
+        },
+        {
+          "number": 4,
+          "physicalNumber": 4,
+          "label": "",
+          "seats": []
+        },
+        {
+          "number": 5,
+          "physicalNumber": 5,
+          "label": "D",
+          "seats": [
+            { "id": "1_5_1",  "column": 2,  "columnPhysicalNumber": 1,  "label": "D1",  "type": "Standard" },
+            { "id": "1_5_2",  "column": 3,  "columnPhysicalNumber": 2,  "label": "D2",  "type": "Standard" },
+            { "id": "1_5_3",  "column": 4,  "columnPhysicalNumber": 3,  "label": "D3",  "type": "Standard" },
+            { "id": "1_5_4",  "column": 5,  "columnPhysicalNumber": 4,  "label": "D4",  "type": "Standard" },
+            { "id": "1_5_5",  "column": 6,  "columnPhysicalNumber": 5,  "label": "D5",  "type": "Standard" },
+            { "id": "1_5_6",  "column": 7,  "columnPhysicalNumber": 6,  "label": "D6",  "type": "Standard" },
+            { "id": "1_5_7",  "column": 8,  "columnPhysicalNumber": 7,  "label": "D7",  "type": "Standard" },
+            { "id": "1_5_8",  "column": 9,  "columnPhysicalNumber": 8,  "label": "D8",  "type": "Standard" },
+            { "id": "1_5_9",  "column": 10, "columnPhysicalNumber": 9,  "label": "D9",  "type": "Standard" },
+            { "id": "1_5_10", "column": 11, "columnPhysicalNumber": 10, "label": "D10", "type": "Standard" },
+            { "id": "1_5_11", "column": 12, "columnPhysicalNumber": 11, "label": "D11", "type": "Standard" },
+            { "id": "1_5_12", "column": 13, "columnPhysicalNumber": 12, "label": "D12", "type": "Standard" }
+          ]
+        },
+        {
+          "number": 6,
+          "physicalNumber": 6,
+          "label": "E",
+          "seats": [
+            { "id": "1_6_1",  "column": 2,  "columnPhysicalNumber": 1,  "label": "E1",  "type": "Standard" },
+            { "id": "1_6_2",  "column": 3,  "columnPhysicalNumber": 2,  "label": "E2",  "type": "Standard" },
+            { "id": "1_6_3",  "column": 4,  "columnPhysicalNumber": 3,  "label": "E3",  "type": "Standard" },
+            { "id": "1_6_4",  "column": 5,  "columnPhysicalNumber": 4,  "label": "E4",  "type": "Standard" },
+            { "id": "1_6_5",  "column": 6,  "columnPhysicalNumber": 5,  "label": "E5",  "type": "Standard" },
+            { "id": "1_6_6",  "column": 7,  "columnPhysicalNumber": 6,  "label": "E6",  "type": "Standard" },
+            { "id": "1_6_7",  "column": 8,  "columnPhysicalNumber": 7,  "label": "E7",  "type": "Standard" },
+            { "id": "1_6_8",  "column": 9,  "columnPhysicalNumber": 8,  "label": "E8",  "type": "Standard" },
+            { "id": "1_6_9",  "column": 10, "columnPhysicalNumber": 9,  "label": "E9",  "type": "Standard" },
+            { "id": "1_6_10", "column": 11, "columnPhysicalNumber": 10, "label": "E10", "type": "Standard" },
+            { "id": "1_6_11", "column": 12, "columnPhysicalNumber": 11, "label": "E11", "type": "Standard" },
+            { "id": "1_6_12", "column": 13, "columnPhysicalNumber": 12, "label": "E12", "type": "Standard" }
+          ]
+        },
+        {
+          "number": 7,
+          "physicalNumber": 7,
+          "label": "F",
+          "seats": [
+            { "id": "1_7_1",  "column": 3,  "columnPhysicalNumber": 1,  "label": "F1",  "type": "Standard" },
+            { "id": "1_7_2",  "column": 4,  "columnPhysicalNumber": 2,  "label": "F2",  "type": "Standard" },
+            { "id": "1_7_3",  "column": 5,  "columnPhysicalNumber": 3,  "label": "F3",  "type": "Standard" },
+            { "id": "1_7_4",  "column": 6,  "columnPhysicalNumber": 4,  "label": "F4",  "type": "Standard" },
+            { "id": "1_7_5",  "column": 7,  "columnPhysicalNumber": 5,  "label": "F5",  "type": "Standard" },
+            { "id": "1_7_6",  "column": 8,  "columnPhysicalNumber": 6,  "label": "F6",  "type": "Standard" },
+            { "id": "1_7_7",  "column": 9,  "columnPhysicalNumber": 7,  "label": "F7",  "type": "Standard" },
+            { "id": "1_7_8",  "column": 10, "columnPhysicalNumber": 8,  "label": "F8",  "type": "Standard" },
+            { "id": "1_7_9",  "column": 11, "columnPhysicalNumber": 9,  "label": "F9",  "type": "Standard" },
+            { "id": "1_7_10", "column": 12, "columnPhysicalNumber": 10, "label": "F10", "type": "Standard" }
+          ]
+        },
+        {
+          "number": 8,
+          "physicalNumber": 8,
+          "label": "G",
+          "seats": [
+            { "id": "1_8_1", "column": 4,  "columnPhysicalNumber": 1, "label": "G1", "type": "Standard" },
+            { "id": "1_8_2", "column": 5,  "columnPhysicalNumber": 2, "label": "G2", "type": "Standard" },
+            { "id": "1_8_3", "column": 6,  "columnPhysicalNumber": 3, "label": "G3", "type": "Standard" },
+            { "id": "1_8_4", "column": 7,  "columnPhysicalNumber": 4, "label": "G4", "type": "Standard" },
+            { "id": "1_8_5", "column": 8,  "columnPhysicalNumber": 5, "label": "G5", "type": "Standard" },
+            { "id": "1_8_6", "column": 9,  "columnPhysicalNumber": 6, "label": "G6", "type": "Standard" },
+            { "id": "1_8_7", "column": 10, "columnPhysicalNumber": 7, "label": "G7", "type": "Standard" },
+            { "id": "1_8_8", "column": 11, "columnPhysicalNumber": 8, "label": "G8", "type": "Standard" }
+          ]
+        }
+      ]
+    }
+  },
+  "seatAvailability": {
+    "seatAvailabilities": {
+      "1_1_1": "Occupied",  "1_1_2": "Occupied",  "1_1_3": "Available", "1_1_4": "Available",
+      "1_1_5": "Occupied",  "1_1_6": "Occupied",  "1_1_7": "Available", "1_1_8": "Available",
+
+      "1_2_1": "Available", "1_2_2": "Occupied",  "1_2_3": "Occupied",  "1_2_4": "Occupied",
+      "1_2_5": "Available", "1_2_6": "Occupied",  "1_2_7": "Occupied",  "1_2_8": "Available",
+      "1_2_9": "Available", "1_2_10": "Occupied",
+
+      "1_3_1": "Available", "1_3_2": "Occupied",  "1_3_3": "Occupied",  "1_3_4": "Available",
+      "1_3_5": "Available", "1_3_6": "Occupied",  "1_3_7": "Occupied",  "1_3_8": "Available",
+      "1_3_9": "Occupied",  "1_3_10": "Occupied", "1_3_11": "Available","1_3_12": "Available",
+
+      "1_5_1": "Occupied",  "1_5_2": "Available", "1_5_3": "Available", "1_5_4": "Occupied",
+      "1_5_5": "Occupied",  "1_5_6": "Occupied",  "1_5_7": "Occupied",  "1_5_8": "Available",
+      "1_5_9": "Occupied",  "1_5_10": "Occupied", "1_5_11": "Available","1_5_12": "Occupied",
+
+      "1_6_1": "Available", "1_6_2": "Occupied",  "1_6_3": "Occupied",  "1_6_4": "Occupied",
+      "1_6_5": "Occupied",  "1_6_6": "Available", "1_6_7": "Available", "1_6_8": "Occupied",
+      "1_6_9": "Occupied",  "1_6_10": "Available","1_6_11": "Occupied", "1_6_12": "Occupied",
+
+      "1_7_1": "Occupied",  "1_7_2": "Available", "1_7_3": "Occupied",  "1_7_4": "Occupied",
+      "1_7_5": "Available", "1_7_6": "Occupied",  "1_7_7": "Occupied",  "1_7_8": "Occupied",
+      "1_7_9": "Available", "1_7_10": "Occupied",
+
+      "1_8_1": "Available", "1_8_2": "Occupied",  "1_8_3": "Occupied",  "1_8_4": "Available",
+      "1_8_5": "Available", "1_8_6": "Occupied",  "1_8_7": "Occupied",  "1_8_8": "Available"
+    },
+    "isSoldOut": false,
+    "isPostShowtime": false
+  }
+}

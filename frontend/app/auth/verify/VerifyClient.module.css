@@ -1,0 +1,118 @@
+.wrap {
+  max-width: 640px;
+  margin: 0 auto;
+  padding-top: clamp(80px, 12vw, 160px);
+  padding-bottom: clamp(80px, 12vw, 160px);
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  animation: rise 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.kicker {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--brass);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--hair-brass);
+  width: fit-content;
+}
+
+.kickerError {
+  color: #d97676;
+  border-bottom-color: rgba(217, 118, 118, 0.4);
+}
+
+.title {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(32px, 5vw, 56px);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  color: var(--mist);
+  margin: 0;
+  font-variation-settings: "opsz" 144;
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.italic {
+  font-family: var(--font-italic);
+  font-style: italic;
+  color: var(--brass-soft);
+  font-weight: 400;
+}
+
+.body {
+  font-family: var(--font-sans);
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--silver);
+  margin: 0;
+  max-width: 52ch;
+}
+
+.spinner {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  border: 1.5px solid var(--hair-strong);
+  border-top-color: var(--brass);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+  vertical-align: middle;
+}
+
+.cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px 22px;
+  background: var(--platinum);
+  color: var(--ink);
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 13.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition:
+    background 200ms ease,
+    transform 120ms ease,
+    box-shadow 220ms ease;
+  width: fit-content;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.8) inset,
+    0 0 0 0 var(--brass-glow);
+}
+
+.cta:hover {
+  background: var(--mist);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 0 0 4px var(--brass-glow);
+}
+
+.cta:hover .ctaArrow {
+  transform: translateX(3px);
+}
+
+.cta:active {
+  transform: translateY(1px);
+}
+
+.ctaArrow {
+  font-size: 16px;
+  transition: transform 200ms ease;
+}
+
+.errorWrap .title {
+  color: var(--mist);
+}

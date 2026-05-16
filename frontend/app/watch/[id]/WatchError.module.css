@@ -1,0 +1,107 @@
+.wrap {
+  max-width: 640px;
+  padding-top: clamp(40px, 8vw, 96px);
+  padding-bottom: clamp(40px, 8vw, 96px);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  animation: rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.kicker {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #d97676;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(217, 118, 118, 0.4);
+  width: fit-content;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(28px, 4vw, 44px);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  color: var(--mist);
+  margin: 0;
+  font-variation-settings: "opsz" 144;
+}
+
+.body {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--silver);
+  margin: 0;
+  max-width: 52ch;
+}
+
+.tech {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  width: fit-content;
+}
+
+.techItem {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--silver-dim);
+}
+
+.techDot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--hair-strong);
+}
+
+.cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px 22px;
+  background: var(--platinum);
+  color: var(--ink);
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 13.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition:
+    background 200ms ease,
+    transform 120ms ease,
+    box-shadow 220ms ease;
+  width: fit-content;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.8) inset,
+    0 0 0 0 var(--brass-glow);
+}
+
+.cta:hover {
+  background: var(--mist);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 0 0 4px var(--brass-glow);
+}
+
+.cta:hover .ctaArrow {
+  transform: translateX(3px);
+}
+
+.cta:active {
+  transform: translateY(1px);
+}
+
+.ctaArrow {
+  font-size: 16px;
+  transition: transform 200ms ease;
+}

@@ -1,0 +1,131 @@
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  animation: rise 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.eyebrowRow {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.eyebrow {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--brass);
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--hair-brass);
+  width: fit-content;
+}
+
+/* --- status pill -------------------------------------------------------- */
+
+.statusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 14px 5px 12px;
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--platinum);
+  background: rgba(214, 219, 228, 0.025);
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--silver);
+}
+
+.statusLive .statusDot {
+  background: var(--brass);
+  animation: liveDot 2.6s ease-out infinite;
+}
+
+.statusWarn {
+  color: #d97676;
+  border-color: rgba(217, 118, 118, 0.32);
+  background: rgba(216, 102, 102, 0.04);
+}
+.statusWarn .statusDot {
+  background: #d97676;
+}
+
+.statusMuted {
+  color: var(--silver-dim);
+}
+.statusMuted .statusDot {
+  background: var(--silver-deep);
+}
+
+/* --- title + meta ------------------------------------------------------- */
+
+.title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(32px, 5.2vw, 60px);
+  line-height: 1.04;
+  letter-spacing: -0.012em;
+  color: var(--mist);
+  font-variation-settings: "opsz" 144;
+}
+
+.metaRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}
+
+.metaItem {
+  font-family: var(--font-italic);
+  font-style: italic;
+  font-size: clamp(15px, 1.4vw, 18px);
+  color: var(--silver);
+}
+
+.metaSep {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--hair-strong);
+}
+
+/* --- technical refs ----------------------------------------------------- */
+
+.tech {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 6px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hair);
+  width: fit-content;
+}
+
+.techItem {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--silver-dim);
+}
+
+.techDot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--hair-strong);
+}
