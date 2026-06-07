@@ -55,90 +55,6 @@
   opacity: 1;
 }
 
-/* --- live flash on incoming seat events ------------------------------ */
-
-.cardFlash {
-  animation: cardFlash 2.4s cubic-bezier(0.16, 1, 0.3, 1) 1;
-}
-
-@keyframes cardFlash {
-  0% {
-    border-color: var(--brass);
-    box-shadow:
-      0 1px 0 rgba(255, 255, 255, 0.04) inset,
-      0 0 0 1px var(--brass) inset,
-      0 0 36px -2px rgba(200, 168, 107, 0.45),
-      0 36px 70px -28px rgba(0, 0, 0, 0.78);
-  }
-  60% {
-    border-color: var(--hair-brass);
-    box-shadow:
-      0 1px 0 rgba(255, 255, 255, 0.04) inset,
-      0 0 18px -4px rgba(200, 168, 107, 0.25),
-      0 32px 70px -28px rgba(0, 0, 0, 0.78);
-  }
-  100% {
-    border-color: var(--hair-strong);
-    box-shadow: var(--depth-card);
-  }
-}
-
-/* --- "N just opened" badge ------------------------------------------- */
-
-.liveBadge {
-  position: absolute;
-  top: -10px;
-  left: clamp(20px, 3vw, 28px);
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 12px 5px 10px;
-  background: linear-gradient(
-    180deg,
-    rgba(11, 19, 34, 0.96) 0%,
-    rgba(6, 10, 20, 0.98) 100%
-  );
-  border: 1px solid var(--brass);
-  border-radius: 999px;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--brass-soft);
-  box-shadow: 0 0 18px -4px rgba(200, 168, 107, 0.45);
-  animation: liveBadgeIn 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
-  z-index: 1;
-}
-
-.liveBadgeDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--brass);
-  animation: liveDot 2.6s ease-out infinite;
-}
-
-@keyframes liveBadgeIn {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* --- top-row right (connection pill + id ref) ------------------------ */
-
-.topRowRight {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
 /* --- top row ---------------------------------------------------------- */
 
 .topRow {
@@ -197,14 +113,6 @@
   background: var(--silver-deep);
 }
 
-.idRef {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--silver-deep);
-}
-
 /* --- title + meta ----------------------------------------------------- */
 
 .title {
@@ -224,6 +132,131 @@
   word-break: break-word;
 }
 
+/* --- title row + inline rename --------------------------------------- */
+
+.titleRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.titleRow .title {
+  min-width: 0;
+}
+
+.renameBtn {
+  flex-shrink: 0;
+  margin-top: 4px;
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--silver-dim);
+  border: 1px solid var(--hair-strong);
+  border-radius: 999px;
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    color 200ms ease,
+    border-color 200ms ease,
+    opacity 200ms ease;
+}
+
+.card:hover .renameBtn,
+.renameBtn:focus-visible {
+  opacity: 1;
+}
+
+.renameBtn:hover:not(:disabled) {
+  color: var(--platinum);
+  border-color: var(--silver-deep);
+}
+
+.renameBtn:disabled {
+  opacity: 0;
+  cursor: not-allowed;
+}
+
+.renameRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.renameInput {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  background: rgba(6, 10, 20, 0.55);
+  border: 1px solid var(--hair-strong);
+  border-radius: 6px;
+  color: var(--mist);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  transition: border-color 200ms ease, background 200ms ease;
+}
+
+.renameInput::placeholder {
+  color: var(--silver-deep);
+}
+
+.renameInput:focus {
+  outline: none;
+  border-color: var(--platinum);
+  background: rgba(6, 10, 20, 0.7);
+}
+
+.renameSave,
+.renameCancel {
+  flex-shrink: 0;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition:
+    background 200ms ease,
+    border-color 200ms ease,
+    color 200ms ease;
+}
+
+.renameSave {
+  background: rgba(200, 168, 107, 0.12);
+  color: var(--brass-soft);
+  border: 1px solid var(--hair-brass);
+}
+
+.renameSave:hover:not(:disabled) {
+  background: rgba(200, 168, 107, 0.22);
+  border-color: var(--brass);
+  color: var(--mist);
+}
+
+.renameCancel {
+  background: transparent;
+  color: var(--silver-dim);
+  border: 1px solid var(--hair-strong);
+}
+
+.renameCancel:hover:not(:disabled) {
+  color: var(--platinum);
+  border-color: var(--silver-deep);
+}
+
+.renameSave:disabled,
+.renameCancel:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .metaRow {
   display: flex;
   flex-wrap: wrap;
@@ -232,8 +265,7 @@
 }
 
 .metaItem {
-  font-family: var(--font-italic);
-  font-style: italic;
+  font-family: var(--font-sans);
   font-size: 14.5px;
   color: var(--silver);
 }
@@ -413,6 +445,19 @@
   transform: translateX(3px);
 }
 
+.viewBtnShort {
+  display: none;
+}
+
+@media (max-width: 480px) {
+  .viewBtnFull {
+    display: none;
+  }
+  .viewBtnShort {
+    display: inline;
+  }
+}
+
 .cancelBtn {
   display: inline-flex;
   align-items: center;
@@ -439,6 +484,38 @@
 }
 
 .cancelBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.removeBtn {
+  display: inline-flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 14px;
+  background: transparent;
+  color: var(--silver-deep);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    color 200ms ease,
+    border-color 200ms ease,
+    background 200ms ease;
+}
+
+.removeBtn:hover:not(:disabled) {
+  color: #d97676;
+  border-color: rgba(217, 118, 118, 0.45);
+  background: rgba(216, 102, 102, 0.06);
+}
+
+.removeBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

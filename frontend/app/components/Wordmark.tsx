@@ -11,8 +11,6 @@ export function Wordmark({
       <SeatGridMark size={size === "md" ? "md" : "sm"} label="Cinewatcher" />
       <span className={styles.lockup}>
         <span className={styles.name}>Cinewatcher</span>
-        <span className={styles.divider} aria-hidden="true" />
-        <span className={styles.tag}>Box Office</span>
       </span>
     </span>
   );

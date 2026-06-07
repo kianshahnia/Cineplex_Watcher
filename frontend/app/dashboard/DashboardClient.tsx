@@ -8,11 +8,13 @@ import {
   cancelWatch,
   getMe,
   listWatches,
+  removeWatch,
+  updateWatch,
 } from "@/lib/api";
 import type { CurrentUser, Watch, WatchStatus } from "@/lib/api";
 // TEST FIXTURE — preview-mode session helpers; see lib/test/fixtures.ts.
 import { clearTestSession, hasTestSession } from "@/lib/test/fixtures";
-import { WatchCardLive } from "./WatchCardLive";
+import { WatchCard } from "./WatchCard";
 import styles from "./Dashboard.module.css";
 
 type LoadState =
@@ -25,9 +27,7 @@ type FilterKey = "all" | WatchStatus;
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "active", label: "Active" },
-  { key: "fulfilled", label: "Fulfilled" },
   { key: "expired", label: "Expired" },
-  { key: "cancelled", label: "Cancelled" },
   { key: "all", label: "All" },
 ];
 
@@ -36,6 +36,8 @@ export function DashboardClient(): JSX.Element {
   const [filter, setFilter] = useState<FilterKey>("active");
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
     setState({ kind: "loading" });
@@ -53,7 +55,7 @@ export function DashboardClient(): JSX.Element {
           ? err.message
           : err instanceof Error
             ? err.message
-            : "Couldn't reach the box office.";
+            : "Couldn’t reach the box office.";
       setState({ kind: "error", message });
     }
   }, []);
@@ -84,13 +86,83 @@ export function DashboardClient(): JSX.Element {
             ? err.message
             : err instanceof Error
               ? err.message
-              : "Couldn't cancel that watch.";
+              : "Couldn’t cancel that watch.";
         setCancelError(message);
       } finally {
         setCancellingId(null);
       }
     },
     [cancellingId],
+  );
+
+  const onRemove = useCallback(
+    async (watch: Watch): Promise<void> => {
+      if (removingId) return;
+      if (
+        typeof window !== "undefined" &&
+        !window.confirm(
+          "Remove this watch permanently? This can’t be undone.",
+        )
+      ) {
+        return;
+      }
+      setCancelError(null);
+      setRemovingId(watch.id);
+      try {
+        await removeWatch(watch.id);
+        // Drop it from the local list — no re-fetch needed.
+        setState((prev) => {
+          if (prev.kind !== "ready") return prev;
+          return {
+            ...prev,
+            watches: prev.watches.filter((w) => w.id !== watch.id),
+          };
+        });
+      } catch (err) {
+        const message =
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : "Couldn’t remove that watch.";
+        setCancelError(message);
+      } finally {
+        setRemovingId(null);
+      }
+    },
+    [removingId],
+  );
+
+  const onRename = useCallback(
+    async (watch: Watch, name: string | null): Promise<void> => {
+      setCancelError(null);
+      setRenamingId(watch.id);
+      try {
+        const updated = await updateWatch(watch.id, { name });
+        setState((prev) => {
+          if (prev.kind !== "ready") return prev;
+          return {
+            ...prev,
+            watches: prev.watches.map((w) =>
+              w.id === updated.id ? updated : w,
+            ),
+          };
+        });
+      } catch (err) {
+        const message =
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : "Couldn’t rename that watch.";
+        setCancelError(message);
+        // Re-throw so the card keeps its inline editor open for a retry.
+        throw err;
+      } finally {
+        setRenamingId(null);
+      }
+    },
+    [],
   );
 
   const counts = useMemo(() => {
@@ -143,10 +215,14 @@ export function DashboardClient(): JSX.Element {
             <ul className={styles.grid}>
               {visibleWatches.map((w) => (
                 <li key={w.id} className={styles.gridItem}>
-                  <WatchCardLive
+                  <WatchCard
                     watch={w}
                     onCancel={onCancel}
                     cancelling={cancellingId === w.id}
+                    onRemove={onRemove}
+                    removing={removingId === w.id}
+                    onRename={onRename}
+                    renaming={renamingId === w.id}
                   />
                 </li>
               ))}
@@ -211,13 +287,8 @@ function DashboardHeader({
       </div>
 
       <h1 className={styles.title}>
-        Your <span className={styles.italic}>watchlist</span>.
+        Your watchlist
       </h1>
-
-      <p className={styles.lede}>
-        Every showtime you're tracking, in one place. We watch the box office —
-        you wait for the ping.
-      </p>
 
       <div className={styles.tally}>
         <span className={styles.tallyItem}>
@@ -284,7 +355,7 @@ function EmptyState({
     return (
       <section className={styles.empty} aria-label="No watches yet">
         <span className={styles.emptyEyebrow}>Quiet house</span>
-        <p className={styles.emptyTitle}>You aren't watching anything yet.</p>
+        <p className={styles.emptyTitle}>You aren’t watching anything yet.</p>
         <p className={styles.emptyBody}>
           Drop a Cineplex showtime URL on the homepage and pick the seats you
           want to track. The watchlist fills up from there.
@@ -315,7 +386,7 @@ function SignedOutPanel(): JSX.Element {
       <span className={styles.panelEyebrow}>Members only</span>
       <p className={styles.panelTitle}>Sign in to view your watchlist.</p>
       <p className={styles.panelBody}>
-        Magic-link login, no password. We'll email you a one-time link to come
+        Magic-link login, no password. We’ll email you a one-time link to come
         back to this page.
       </p>
       <Link href="/#members" className={styles.panelCta}>
@@ -334,11 +405,11 @@ function ErrorPanel({
   onRetry: () => void;
 }): JSX.Element {
   return (
-    <section className={styles.panel} aria-label="Couldn't load watches">
+    <section className={styles.panel} aria-label="Couldn’t load watches">
       <span className={`${styles.panelEyebrow} ${styles.panelEyebrowWarn}`}>
         Connection lost
       </span>
-      <p className={styles.panelTitle}>We couldn't load your watchlist.</p>
+      <p className={styles.panelTitle}>We couldn’t load your watchlist.</p>
       <p className={styles.panelBody}>{message}</p>
       <button type="button" className={styles.panelCta} onClick={onRetry}>
         <span>Try again</span>

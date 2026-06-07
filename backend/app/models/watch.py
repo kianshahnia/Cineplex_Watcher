@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -19,6 +20,17 @@ class Watch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     status: Mapped[str] = mapped_column(String(20), default="active", nullable=False)
     notify_any_seat: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # User-provided label for this watch. NULL falls back to the movie name
+    # (currently always NULL) / a generic placeholder in the UI.
+    name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # User-picked screening date/time for this watch. Stored *naive* (no
+    # timezone) because it represents the theatre-local wall-clock the user
+    # selected and we render it back verbatim — see the migration + the
+    # frontend DateTimePicker. NULL falls back to the (always-NULL) showtime
+    # metadata / a generic placeholder.
+    showtime_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
 
     user: Mapped["User"] = relationship(back_populates="watches")  # noqa: F821
     showtime: Mapped["Showtime"] = relationship(back_populates="watches")  # noqa: F821

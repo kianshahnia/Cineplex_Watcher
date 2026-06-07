@@ -1,8 +1,22 @@
 from celery import Celery
 
 from app.config import settings
+from app.logging_config import configure_logging
 
-celery = Celery("cineplex_watcher", broker=settings.redis_url, backend=settings.redis_url)
+# Configure structlog before any task code runs so Celery worker logs are
+# structured the same way as FastAPI server logs.
+configure_logging()
+
+celery = Celery(
+    "cineplex_watcher",
+    broker=settings.redis_url,
+    backend=settings.redis_url,
+    # Point at the module that actually defines the task. ``app.tasks`` is just
+    # an (empty) package __init__, so including it registered nothing — the
+    # worker booted with an empty task list and rejected every beat message with
+    # "Received unregistered task of type 'tasks.poll_seats'".
+    include=["app.tasks.poll_seats"],
+)
 
 celery.conf.update(
     task_serializer="json",
@@ -20,7 +34,8 @@ celery.conf.update(
     },
 )
 
-# Autodiscover tasks in the app.tasks package so the worker registers them
-# when it starts.  The beat_schedule above references the task by name string
-# to avoid a circular import (poll_seats.py imports celery_app.py).
-celery.autodiscover_tasks(["app.tasks"])
+# The beat_schedule above references the task by its name string
+# ("tasks.poll_seats") rather than importing it, which avoids the circular
+# import (poll_seats.py imports `celery` from this module). Registration of the
+# task object itself is handled by the ``include=`` argument above, imported
+# when the worker finalizes the app on startup.

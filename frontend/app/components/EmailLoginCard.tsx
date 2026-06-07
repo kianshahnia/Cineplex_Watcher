@@ -49,10 +49,10 @@ export function EmailLoginCard(): JSX.Element {
         <div className={styles.copy}>
           <span className={styles.kicker}>Members</span>
           <h2 className={styles.title}>
-            Save your watches <em className={styles.italic}>across visits</em>.
+            Save your watches across visits.
           </h2>
           <p className={styles.body}>
-            Sign in by email — a single-use link, no password ever. Your active
+            Sign in by email using a single-use link, with no password ever. Your active
             showtimes and notification preferences follow you to any device.
           </p>
           <ul className={styles.bullets}>

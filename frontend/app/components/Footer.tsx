@@ -8,9 +8,6 @@ export function Footer(): JSX.Element {
       <div className={`${styles.inner} container`}>
         <div className={styles.col}>
           <Wordmark size="sm" />
-          <p className={styles.tagline}>
-            Didn't catch a seat? We'll let you know when one opens.
-          </p>
         </div>
 
         <div className={styles.colRight}>

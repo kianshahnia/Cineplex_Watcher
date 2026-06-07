@@ -20,7 +20,13 @@
  * ============================================================================
  */
 
-import type { CurrentUser, SeatToWatch, Watch, WatchStatus } from "@/lib/api";
+import type {
+  CurrentUser,
+  SeatToWatch,
+  Watch,
+  WatchStatus,
+  WatchUpdate,
+} from "@/lib/api";
 
 import {
   TEST_SHOWTIME_ID,
@@ -165,6 +171,8 @@ export function createTestWatch(args: {
   theatre_id: number;
   showtime_id: number;
   notify_any_seat: boolean;
+  name?: string | null;
+  showtime_at?: string | null;
 }): Watch {
   const watches = readWatches();
   // The dedup behavior in the real backend: re-use an existing active watch
@@ -189,12 +197,33 @@ export function createTestWatch(args: {
       is_active: true,
     },
     status: "active",
+    name: args.name?.trim() || null,
+    showtime_at: args.showtime_at ?? null,
     notify_any_seat: args.notify_any_seat,
     seats: [],
     created_at: new Date().toISOString(),
   };
   writeWatches([...watches, watch]);
   return watch;
+}
+
+export function updateTestWatch(
+  watch_id: string,
+  updates: WatchUpdate,
+): Watch | null {
+  const watches = readWatches();
+  const idx = watches.findIndex((w) => w.id === watch_id);
+  if (idx === -1) return null;
+  const existing = watches[idx];
+  if (!existing) return null;
+  // Mirror the backend's partial-update semantics: only touch the keys present.
+  const updated: Watch = { ...existing };
+  if ("name" in updates) updated.name = updates.name?.trim() || null;
+  if ("showtime_at" in updates) updated.showtime_at = updates.showtime_at ?? null;
+  const next = [...watches];
+  next[idx] = updated;
+  writeWatches(next);
+  return updated;
 }
 
 export function addSeatsToTestWatch(
@@ -240,6 +269,14 @@ export function cancelTestWatch(watch_id: string): Watch | null {
   return cancelled;
 }
 
+export function removeTestWatch(watch_id: string): boolean {
+  const watches = readWatches();
+  const next = watches.filter((w) => w.id !== watch_id);
+  if (next.length === watches.length) return false;
+  writeWatches(next);
+  return true;
+}
+
 // --- Pre-seeded watches for first-time visitors --------------------------
 
 /**
@@ -264,6 +301,8 @@ export function seedTestWatchesIfEmpty(): void {
         is_active: false,
       },
       status: "fulfilled",
+      name: null,
+      showtime_at: "2026-05-30T19:30:00",
       notify_any_seat: false,
       seats: [
         {

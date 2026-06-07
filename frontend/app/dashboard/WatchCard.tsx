@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 
 import type { Watch } from "@/lib/api";
 import styles from "./WatchCard.module.css";
@@ -9,12 +10,12 @@ interface Props {
   watch: Watch;
   onCancel: (w: Watch) => void;
   cancelling: boolean;
-  /** When >0, renders a "just opened" badge with this count. */
-  liveCount?: number;
-  /** When true, applies a transient brass-glow border highlight. */
-  flashing?: boolean;
-  /** Optional connection-status badge rendered in the corner. */
-  connectionBadge?: JSX.Element | null;
+  /** Permanently delete the watch (hard delete, any status). */
+  onRemove: (w: Watch) => void;
+  removing: boolean;
+  /** Rename the watch. Resolves on success, rejects so the editor stays open. */
+  onRename: (w: Watch, name: string | null) => Promise<void>;
+  renaming: boolean;
 }
 
 const STATUS_COPY: Record<Watch["status"], { label: string; tone: string }> = {
@@ -57,15 +58,25 @@ export function WatchCard({
   watch,
   onCancel,
   cancelling,
-  liveCount = 0,
-  flashing = false,
-  connectionBadge = null,
+  onRemove,
+  removing,
+  onRename,
+  renaming,
 }: Props): JSX.Element {
-  const { showtime, status, notify_any_seat, seats, created_at } = watch;
+  const { showtime, status, name, showtime_at, notify_any_seat, seats, created_at } =
+    watch;
 
-  const movieName = showtime.movie_name?.trim() || "Your watched showtime";
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  // The watch's own name wins; otherwise fall back to the (currently always
+  // NULL) movie name, then a generic placeholder.
+  const displayName =
+    name?.trim() || showtime.movie_name?.trim() || "Your watched showtime";
   const theaterName = showtime.theater_name?.trim();
-  const showtimeAt = formatShowtime(showtime.showtime_at);
+  // The user's per-watch date wins over the (always-NULL) shared showtime
+  // metadata — same precedence as the name.
+  const showtimeAt = formatShowtime(showtime_at ?? showtime.showtime_at);
   const statusInfo = STATUS_COPY[status];
 
   const seatLabels = sortLabels(seats.map((s) => s.seat_label));
@@ -73,21 +84,28 @@ export function WatchCard({
   const slug = `${showtime.theatre_id}-${showtime.showtime_id}`;
 
   const isActive = status === "active";
+  const busy = cancelling || removing;
+
+  function startEditing(): void {
+    setDraft(name ?? "");
+    setEditing(true);
+  }
+
+  async function saveName(): Promise<void> {
+    if (renaming) return;
+    try {
+      await onRename(watch, draft.trim() || null);
+      setEditing(false);
+    } catch {
+      // Keep the editor open; the dashboard surfaces the error banner.
+    }
+  }
 
   return (
     <article
-      className={`${styles.card} ${isActive ? styles.cardActive : ""} ${flashing ? styles.cardFlash : ""}`}
+      className={`${styles.card} ${isActive ? styles.cardActive : ""}`}
       data-status={status}
     >
-      {liveCount > 0 ? (
-        <span className={styles.liveBadge} aria-live="polite">
-          <span className={styles.liveBadgeDot} aria-hidden="true" />
-          {liveCount === 1
-            ? "1 seat just opened"
-            : `${liveCount} seats just opened`}
-        </span>
-      ) : null}
-
       <div className={styles.topRow}>
         <span
           className={`${styles.statusPill} ${styles[`status_${statusInfo.tone}`]}`}
@@ -95,15 +113,55 @@ export function WatchCard({
           <span className={styles.statusDot} aria-hidden="true" />
           {statusInfo.label}
         </span>
-        <div className={styles.topRowRight}>
-          {connectionBadge}
-          <span className={styles.idRef}>
-            T{showtime.theatre_id} · S{showtime.showtime_id}
-          </span>
-        </div>
       </div>
 
-      <h2 className={styles.title}>{movieName}</h2>
+      {editing ? (
+        <div className={styles.renameRow}>
+          <input
+            className={styles.renameInput}
+            value={draft}
+            maxLength={120}
+            autoFocus
+            placeholder="Name this showtime"
+            disabled={renaming}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void saveName();
+              if (e.key === "Escape") setEditing(false);
+            }}
+          />
+          <button
+            type="button"
+            className={styles.renameSave}
+            onClick={() => void saveName()}
+            disabled={renaming}
+            aria-busy={renaming}
+          >
+            {renaming ? "Saving…" : "Save"}
+          </button>
+          <button
+            type="button"
+            className={styles.renameCancel}
+            onClick={() => setEditing(false)}
+            disabled={renaming}
+          >
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <div className={styles.titleRow}>
+          <h2 className={styles.title}>{displayName}</h2>
+          <button
+            type="button"
+            className={styles.renameBtn}
+            onClick={startEditing}
+            disabled={busy}
+            title="Rename this watch"
+          >
+            Rename
+          </button>
+        </div>
+      )}
 
       <div className={styles.metaRow}>
         {theaterName ? (
@@ -127,7 +185,7 @@ export function WatchCard({
           <div className={styles.anySeat}>
             <span className={styles.anySeatTag}>Any seat</span>
             <span className={styles.anySeatBody}>
-              You'll be pinged the moment any seat in the house opens up.
+              You’ll be pinged the moment any seat in the house opens up.
             </span>
           </div>
         ) : null}
@@ -173,7 +231,8 @@ export function WatchCard({
 
         <div className={styles.actions}>
           <Link href={`/watch/${slug}`} className={styles.viewBtn}>
-            <span>{isActive ? "Open seat map" : "View seat map"}</span>
+            <span className={styles.viewBtnFull}>{isActive ? "Open seat map" : "View seat map"}</span>
+            <span className={styles.viewBtnShort}>Seat map</span>
             <span className={styles.arrow} aria-hidden="true">→</span>
           </Link>
           {isActive ? (
@@ -181,12 +240,22 @@ export function WatchCard({
               type="button"
               className={styles.cancelBtn}
               onClick={() => onCancel(watch)}
-              disabled={cancelling}
+              disabled={cancelling || removing}
               aria-busy={cancelling}
             >
               {cancelling ? "Cancelling…" : "Cancel"}
             </button>
           ) : null}
+          <button
+            type="button"
+            className={styles.removeBtn}
+            onClick={() => onRemove(watch)}
+            disabled={removing || cancelling}
+            aria-busy={removing}
+            title="Remove this watch permanently"
+          >
+            {removing ? "Removing…" : "Remove"}
+          </button>
         </div>
       </footer>
     </article>

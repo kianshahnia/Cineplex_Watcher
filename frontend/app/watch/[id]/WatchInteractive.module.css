@@ -1,39 +1,3 @@
-/* --- live updates bar (above seat map) ------------------------------- */
-
-.liveBar {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin: 4px 0 18px;
-}
-
-.liveLabel {
-  font-family: var(--font-sans);
-  font-size: 10.5px;
-  font-weight: 500;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--silver-dim);
-}
-
-.liveRule {
-  flex: 1;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    var(--hair-strong) 0%,
-    var(--hair) 60%,
-    transparent 100%
-  );
-  max-width: 240px;
-}
-
-/* --- positioned container so the ticker can sit on top of the map --- */
-
-.mapWrap {
-  position: relative;
-}
-
 /* --- action panel (below) ------------------------------------------- */
 
 .panel {
@@ -173,8 +137,7 @@
 }
 
 .numeralLabel {
-  font-family: var(--font-italic);
-  font-style: italic;
+  font-family: var(--font-sans);
   font-size: clamp(15px, 1.4vw, 18px);
   color: var(--silver);
   padding-bottom: 6px;
@@ -217,95 +180,381 @@
   max-width: 38ch;
 }
 
-/* --- custom checkbox toggle ------------------------------------------ */
+/* --- watch all seats (single primary choice) ------------------------ */
 
-.toggle {
+.watchAllBtn {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 14px;
+  align-items: center;
+  text-align: left;
+  width: 100%;
   padding: 16px 18px;
+  background: rgba(6, 10, 20, 0.45);
   border: 1px solid var(--hair-strong);
   border-radius: 8px;
-  background: rgba(6, 10, 20, 0.45);
   cursor: pointer;
   transition: border-color 200ms ease, background 200ms ease;
 }
 
-.toggle:hover {
+.watchAllBtn:hover {
   border-color: var(--brass-dim);
+  background: rgba(200, 168, 107, 0.06);
 }
 
-.toggleDisabled {
-  cursor: not-allowed;
-  opacity: 0.7;
+.watchAllBtnActive {
+  border-color: var(--brass);
+  background: rgba(200, 168, 107, 0.12);
 }
 
-.toggleDisabled:hover {
-  border-color: var(--hair-strong);
-}
-
-.toggleInput {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.toggleBox {
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  border: 1px solid var(--hair-strong);
-  background: rgba(6, 10, 20, 0.6);
+.watchAllMark {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
-  margin-top: 2px;
-  transition: background 200ms ease, border-color 200ms ease;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--brass-soft);
+  border: 1px solid var(--hair-brass);
+  background: rgba(6, 10, 20, 0.5);
+  transition: background 200ms ease, color 200ms ease, border-color 200ms ease;
 }
 
-.toggleCheck {
-  width: 10px;
-  height: 6px;
-  border-left: 2px solid var(--ink);
-  border-bottom: 2px solid var(--ink);
-  transform: rotate(-45deg) scale(0);
-  margin-top: -2px;
-  transition: transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.toggleInput:checked ~ .toggleBox {
+.watchAllBtnActive .watchAllMark {
   background: var(--brass);
+  color: var(--ink);
   border-color: var(--brass);
 }
 
-.toggleInput:checked ~ .toggleBox .toggleCheck {
-  transform: rotate(-45deg) scale(1);
+.watchAllCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
 }
 
-.toggleInput:focus-visible ~ .toggleBox {
-  outline: 1px solid var(--brass);
-  outline-offset: 3px;
+.watchAllTitle {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--mist);
 }
 
-.toggleCopy {
+.watchAllSub {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--silver);
+}
+
+/* --- "all seats" summary box ---------------------------------------- */
+
+.allBox {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 1px solid var(--hair-brass);
+  border-left: 2px solid var(--brass);
+  border-radius: 8px;
+  background: rgba(200, 168, 107, 0.06);
+}
+
+.allBadge {
+  font-family: var(--font-display);
+  font-variation-settings: "opsz" 144;
+  font-weight: 400;
+  font-size: 34px;
+  line-height: 1;
+  color: var(--brass-soft);
+  letter-spacing: -0.01em;
+  flex-shrink: 0;
+}
+
+.allCopy {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
-.toggleTitle {
+.allTitle {
   font-family: var(--font-sans);
-  font-size: 14.5px;
-  color: var(--mist);
+  font-size: 15px;
   font-weight: 500;
+  color: var(--mist);
 }
 
-.toggleSub {
+.allSub {
   font-family: var(--font-sans);
   font-size: 13px;
-  color: var(--silver);
   line-height: 1.5;
+  color: var(--silver);
+}
+
+/* --- "or pick your own" divider ------------------------------------- */
+
+.orRule {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--silver-dim);
+}
+
+.orRule::before,
+.orRule::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--hair);
+}
+
+/* --- name this showtime field --------------------------------------- */
+
+.nameField {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nameLabel {
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--silver-dim);
+}
+
+.nameInputRow {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.nameInput {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 0 14px;
+  background: rgba(6, 10, 20, 0.55);
+  border: 1px solid var(--hair-strong);
+  border-radius: 6px;
+  color: var(--mist);
+  font-family: var(--font-sans);
+  font-size: 14.5px;
+  transition: border-color 200ms ease, background 200ms ease;
+}
+
+.nameInput::placeholder {
+  color: var(--silver-deep);
+}
+
+.nameInput:focus {
+  outline: none;
+  border-color: var(--platinum);
+  background: rgba(6, 10, 20, 0.7);
+}
+
+.nameSaveBtn {
+  flex-shrink: 0;
+  padding: 0 16px;
+  background: rgba(200, 168, 107, 0.1);
+  color: var(--brass-soft);
+  border: 1px solid var(--hair-brass);
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition:
+    background 200ms ease,
+    border-color 200ms ease,
+    color 200ms ease;
+}
+
+.nameSaveBtn:hover:not(:disabled) {
+  background: rgba(200, 168, 107, 0.2);
+  border-color: var(--brass);
+  color: var(--mist);
+}
+
+.nameSaveBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.nameHint {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--silver-dim);
+  max-width: 42ch;
+}
+
+/* --- showtime date & time field ------------------------------------- */
+
+.dateField {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dateHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* iOS-style on/off switch for attaching a date at all. */
+.dateToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--silver-dim);
+  transition: color 200ms ease;
+}
+
+.dateToggle:hover {
+  color: var(--silver);
+}
+
+.dateToggleTrack {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  border-radius: 9px;
+  background: rgba(6, 10, 20, 0.7);
+  border: 1px solid var(--hair-strong);
+  transition: background 200ms ease, border-color 200ms ease;
+}
+
+.dateToggleKnob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--silver-dim);
+  transition: transform 200ms ease, background 200ms ease;
+}
+
+.dateToggleOn .dateToggleTrack {
+  background: rgba(200, 168, 107, 0.22);
+  border-color: var(--brass);
+}
+
+.dateToggleOn .dateToggleKnob {
+  transform: translateX(16px);
+  background: var(--brass);
+}
+
+.dateToggleOn {
+  color: var(--brass-soft);
+}
+
+.dateFoot {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* --- selection summary ---------------------------------------------- */
+
+.selSummary {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.clearLink {
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  color: var(--silver-dim);
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  transition: color 200ms ease, border-color 200ms ease;
+}
+
+.clearLink:hover {
+  color: var(--platinum);
+  border-bottom-color: var(--silver-deep);
+}
+
+/* --- commit footer: status text + cancel link ----------------------- */
+
+.commitFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  min-height: 20px;
+}
+
+.statusIdle,
+.statusOk,
+.statusError {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.statusIdle {
+  color: var(--silver-dim);
+}
+
+.statusOk {
+  color: var(--brass-soft);
+}
+
+.statusError {
+  color: #d97676;
+}
+
+.cancelLink {
+  flex-shrink: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  color: var(--silver-dim);
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+  transition: color 200ms ease, border-color 200ms ease;
+}
+
+.cancelLink:hover:not(:disabled) {
+  color: #d97676;
+  border-bottom-color: rgba(217, 118, 118, 0.5);
+}
+
+.cancelLink:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* --- buttons --------------------------------------------------------- */

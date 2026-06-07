@@ -70,9 +70,9 @@ export const TEST_THEATRE_ID = 99999;
 export const TEST_SHOWTIME_ID = 99999;
 
 /**
- * Stable UUID for the fake showtime row.  The dashboard `WatchCardLive` and
- * the watch page both check `showtime.id` against this to decide whether to
- * skip the real WebSocket and run the fake event emitter instead.
+ * Stable UUID for the fake showtime row.  The watch page checks `showtime.id`
+ * against this to decide whether to skip the real WebSocket and run the fake
+ * event emitter instead.
  */
 export const TEST_SHOWTIME_UUID = "00000000-0000-0000-0000-000000099999";
 

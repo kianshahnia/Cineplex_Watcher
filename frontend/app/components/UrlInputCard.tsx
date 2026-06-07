@@ -54,26 +54,17 @@ export function UrlInputCard(): JSX.Element {
       aria-label="Enter a Cineplex showtime URL"
       id="top"
     >
-      <div className={styles.head}>
-        <span className={styles.eyebrow}>
-          <span className={styles.brassPip} aria-hidden="true" />
-          Now Showing — 2026
-        </span>
-        <span className={styles.edition}>Vol. I · Issue 01</span>
-      </div>
-
       <div className={styles.grid}>
         <div className={styles.lead}>
           <h1 className={styles.headline}>
-            Catch the seat
+            Track any 
             <br />
-            the <em className={styles.italic}>moment</em> it opens.
+            Cineplex showtime.
           </h1>
 
           <p className={styles.lede}>
-            Cinewatcher tracks any Cineplex showtime and pings you the second a
-            seat clears — email, text, or push. No refreshing, no checking
-            back. Just paste a link.
+            Didn’t get the seats you wanted?
+            We’ll let you know the second they open up through email, text, or push.
           </p>
 
           <form className={styles.form} onSubmit={onSubmit} noValidate>
@@ -122,11 +113,6 @@ export function UrlInputCard(): JSX.Element {
         </div>
 
         <aside className={styles.aside}>
-          <div className={styles.asideTop}>
-            <div className={styles.asideLabel}>Scene</div>
-            <div className={styles.asideNumeral}>I</div>
-          </div>
-
           <div className={styles.asideMark} aria-hidden="true">
             <SeatGridMark size="lg" dim />
           </div>
@@ -134,10 +120,6 @@ export function UrlInputCard(): JSX.Element {
           <div className={styles.asideFoot}>
             <div className={styles.asideRule} />
             <div className={styles.asideClock}>{clock}</div>
-            <div className={styles.asideStatus}>
-              <span className={styles.statusDot} aria-hidden="true" />
-              Standby — awaiting URL
-            </div>
           </div>
         </aside>
       </div>

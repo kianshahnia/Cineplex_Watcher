@@ -1,0 +1,74 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Resolved value, shown above the drums so the user gets immediate feedback. */
+.preview {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--font-sans);
+}
+
+.previewDay {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--mist);
+}
+
+.previewSep {
+  color: var(--silver-deep);
+}
+
+.previewTime {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--brass-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.previewYear {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--silver-dim);
+  margin-left: 2px;
+}
+
+/* The row of drums sits on a single recessed panel with one shared band look. */
+.cols {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 6px 10px;
+  background: rgba(6, 10, 20, 0.55);
+  border: 1px solid var(--hair-strong);
+  border-radius: 10px;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.colLabel {
+  height: 14px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--silver-dim);
+  text-align: center;
+  margin-bottom: 2px;
+}
+
+/* Thin rule between the date drums (month/day) and the time drums. */
+.divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 16px 6px 4px;
+  background: var(--hair);
+}

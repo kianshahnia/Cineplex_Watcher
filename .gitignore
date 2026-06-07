@@ -11,6 +11,11 @@ __pycache__/
 dist/
 build/
 
+# Celery runtime artifacts
+celerybeat-schedule
+celerybeat-schedule.*
+celerybeat.pid
+
 # Node / Next.js
 node_modules/
 .next/
@@ -37,3 +42,6 @@ redisdata/
 test_scraper.py
 CLAUDE.local.md
 docs/context.md
+docs/bugs.md
+docs/frontend_issues.md
+docs/features_to_add.md

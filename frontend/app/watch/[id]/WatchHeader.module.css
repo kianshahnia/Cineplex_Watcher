@@ -90,8 +90,7 @@
 }
 
 .metaItem {
-  font-family: var(--font-italic);
-  font-style: italic;
+  font-family: var(--font-sans);
   font-size: clamp(15px, 1.4vw, 18px);
   color: var(--silver);
 }
@@ -99,33 +98,6 @@
 .metaSep {
   width: 4px;
   height: 4px;
-  border-radius: 50%;
-  background: var(--hair-strong);
-}
-
-/* --- technical refs ----------------------------------------------------- */
-
-.tech {
-  display: inline-flex;
-  align-items: center;
-  gap: 14px;
-  margin-top: 6px;
-  padding-top: 16px;
-  border-top: 1px solid var(--hair);
-  width: fit-content;
-}
-
-.techItem {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--silver-dim);
-}
-
-.techDot {
-  width: 3px;
-  height: 3px;
   border-radius: 50%;
   background: var(--hair-strong);
 }

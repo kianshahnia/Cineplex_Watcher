@@ -31,5 +31,25 @@ class Settings(BaseSettings):
     vapid_public_key: str = ""
     vapid_claim_email: str = ""
 
+    # Logging (Phase 5 Step 3)
+    # Set LOG_LEVEL=DEBUG to see SQL queries and verbose service output.
+    log_level: str = "INFO"
+    # Set LOG_JSON=true in production for structured JSON output (one object
+    # per line) that log aggregators (Datadog, Loki, CloudWatch) can parse.
+    # Leave false in local dev for pretty coloured console output.
+    log_json: bool = False
+
+    # Rate limiting (Phase 5 Step 2)
+    # Toggle without ripping out decorators — handy for pytest runs and load tests.
+    rate_limit_enabled: bool = True
+    # Storage URI passed straight to `limits` (slowapi's backend). Defaults to the
+    # same Redis we already use for pub/sub so per-worker counters stay in sync.
+    # Set to "memory://" to fall back to per-process counters (single-worker only).
+    rate_limit_storage_uri: str = ""
+    # Trust X-Forwarded-For when extracting the client IP.  Leave off in local dev
+    # (where the header is unset and `request.client.host` is correct).  Flip on
+    # ONLY when deployed behind a proxy you control (Railway, Fly, Cloudflare).
+    rate_limit_trust_forwarded_for: bool = False
+
 
 settings = Settings()

@@ -65,7 +65,7 @@ export function VerifyClient(): JSX.Element {
       <section className={`${styles.wrap} container`}>
         <span className={styles.kicker}>Welcome back</span>
         <h1 className={styles.title}>
-          You&apos;re <em className={styles.italic}>in</em>.
+          You&apos;re in.
         </h1>
         <p className={styles.body}>{state.message}</p>
         <Link className={styles.cta} href="/">

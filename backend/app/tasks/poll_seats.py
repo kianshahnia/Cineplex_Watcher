@@ -186,6 +186,10 @@ class _NotifyJob:
     user_phone: str | None
     user_push_subscription: dict | None
     user_notify_via: str | None
+    # User-chosen label for this watch (watches.name). Takes precedence over
+    # the showtime's movie_name when present — it's the personal name the user
+    # gave the showtime at create time. movie_name is currently always NULL.
+    watch_name: str | None
     movie_name: str | None
     theater_name: str | None
     showtime_at: datetime | None
@@ -253,16 +257,25 @@ async def _poll_showtime(r, showtime: Showtime) -> None:
     # --- 2. Load previous availability snapshot from Redis ---
     snapshot_key = make_snapshot_key(str(showtime.id))
     raw_snapshot = await r.get(snapshot_key)
-    # Assume "Occupied" for any seat not seen before (conservative default
-    # that prevents spurious "seat became available" events on first poll).
+    # The very first poll of a showtime has no prior snapshot. We must NOT
+    # treat the seats that happen to be open *right now* as fresh
+    # "Occupied -> Available" transitions — otherwise a user who starts
+    # watching a showtime that already has open seats is immediately emailed
+    # about every one of them, even though nothing actually changed
+    # (bugs.md #1). Instead, the first poll only *establishes the baseline*;
+    # real change detection begins on the next cycle.
+    is_baseline_poll = raw_snapshot is None
     prev_statuses: dict[str, str] = json.loads(raw_snapshot) if raw_snapshot else {}
 
     # --- 3. Diff: find every seat whose status changed ---
+    # Skipped on the baseline poll (see above) — we have no prior state to
+    # diff against, so we can't legitimately claim any seat "became" available.
     changed: list[tuple[str, str, str]] = []  # (seat_key, old_status, new_status)
-    for seat_key, new_status in new_statuses.items():
-        old_status = prev_statuses.get(seat_key, "Occupied")
-        if old_status != new_status:
-            changed.append((seat_key, old_status, new_status))
+    if not is_baseline_poll:
+        for seat_key, new_status in new_statuses.items():
+            old_status = prev_statuses.get(seat_key, "Occupied")
+            if old_status != new_status:
+                changed.append((seat_key, old_status, new_status))
 
     notify_jobs: list[_NotifyJob] = []
 
@@ -401,9 +414,13 @@ async def _poll_showtime(r, showtime: Showtime) -> None:
                             user_phone=user.phone,
                             user_push_subscription=user.push_subscription,
                             user_notify_via=user.notify_via,
+                            watch_name=watch.name,
                             movie_name=db_showtime.movie_name,
                             theater_name=db_showtime.theater_name,
-                            showtime_at=db_showtime.showtime_at,
+                            # The user's per-watch date wins over the (always
+                            # NULL) shared showtime metadata, mirroring how
+                            # watch_name overrides movie_name above.
+                            showtime_at=watch.showtime_at or db_showtime.showtime_at,
                             theatre_id=db_showtime.theatre_id,
                             showtime_id=db_showtime.showtime_id,
                             candidate_seats=candidates,
@@ -458,11 +475,16 @@ async def _send_notifications(jobs: list[_NotifyJob]) -> None:
         seat_labels = [c.seat_label for c in job.candidate_seats]
         any_channel_ok = False
 
+        # The name the user gave this watch wins over the (currently always
+        # NULL) showtime movie_name. When both are NULL the renderers fall
+        # back to their own "Your watched showtime" / "Cineplex" placeholders.
+        display_name = job.watch_name or job.movie_name
+
         if user_wants_email(job.user_notify_via):
             email_ok = await asyncio.to_thread(
                 send_seat_available_email,
                 to_email=job.user_email,
-                movie_name=job.movie_name,
+                movie_name=display_name,
                 theater_name=job.theater_name,
                 showtime_at=job.showtime_at,
                 seat_labels=seat_labels,
@@ -475,7 +497,7 @@ async def _send_notifications(jobs: list[_NotifyJob]) -> None:
             sms_ok = await asyncio.to_thread(
                 send_seat_available_sms,
                 to_phone=job.user_phone,
-                movie_name=job.movie_name,
+                movie_name=display_name,
                 seat_labels=seat_labels,
                 theatre_id=job.theatre_id,
                 showtime_id=job.showtime_id,
@@ -486,7 +508,7 @@ async def _send_notifications(jobs: list[_NotifyJob]) -> None:
             push_ok = await asyncio.to_thread(
                 send_seat_available_push,
                 subscription_info=job.user_push_subscription,
-                movie_name=job.movie_name,
+                movie_name=display_name,
                 seat_labels=seat_labels,
                 theatre_id=job.theatre_id,
                 showtime_id=job.showtime_id,

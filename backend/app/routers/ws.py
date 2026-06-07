@@ -37,6 +37,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import async_session_factory
 from app.models.showtime import Showtime
+from app.services.rate_limit import WsConnectRateLimited, enforce_ws_connect_limit
 from app.services.redis_client import make_channel
 
 log = structlog.get_logger()
@@ -46,11 +47,26 @@ router = APIRouter()
 # Custom WebSocket close codes (4000–4999 is the application-use range).
 WS_CLOSE_NOT_AUTHENTICATED = 4001
 WS_CLOSE_SHOWTIME_NOT_FOUND = 4003
+WS_CLOSE_RATE_LIMITED = 4029  # mirrors HTTP 429 — easy to remember on the frontend
 
 
 # ---------------------------------------------------------------------------
 # Auth helper — WebSocket-specific (avoids HTTPException)
 # ---------------------------------------------------------------------------
+
+
+def _ws_client_ip(websocket: WebSocket) -> str:
+    """Best-effort source IP for the WebSocket handshake.
+
+    Mirrors :func:`services.rate_limit.client_ip` — honours
+    ``X-Forwarded-For`` only when explicitly trusted, otherwise falls back
+    to the raw peer address from Starlette.
+    """
+    if settings.rate_limit_trust_forwarded_for:
+        forwarded = websocket.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
+    return websocket.client.host if websocket.client else "unknown"
 
 
 def _authenticate_ws(websocket: WebSocket) -> uuid.UUID | None:
@@ -136,10 +152,35 @@ async def ws_showtime(websocket: WebSocket, showtime_uuid: uuid.UUID) -> None:
 
     **Close codes**:
         4001 — not authenticated,
-        4003 — showtime not found or inactive.
+        4003 — showtime not found or inactive,
+        4029 — connection rate limit exceeded (mirrors HTTP 429).
     """
     # ── 1. Authenticate ──────────────────────────────────────────────────
+    # We authenticate FIRST so the rate-limit bucket is keyed by the real
+    # user UUID when possible; failed-auth attempts still get throttled,
+    # they just share the per-IP bucket with all other anonymous traffic
+    # from the same source.
     user_id = _authenticate_ws(websocket)
+
+    # ── 2. Rate-limit connection attempts ────────────────────────────────
+    # Runs before any DB / Redis pubsub work — a connect-flood from a single
+    # client gets rejected with O(1) Redis ops.  Same key namespace prefix
+    # (``user:`` / ``ip:``) as the HTTP slowapi keys so it's easy to grep
+    # logs for a single misbehaving actor.
+    rl_key = f"user:{user_id}" if user_id else f"ip:{_ws_client_ip(websocket)}"
+    try:
+        await enforce_ws_connect_limit(key=rl_key, redis=websocket.app.state.redis)
+    except WsConnectRateLimited as exc:
+        # Close BEFORE accept() so the upgrade is rejected outright.  The
+        # browser sees a failed handshake; the hook in useShowtimeEvents
+        # treats this as a (non-fatal) close and backs off via the existing
+        # exponential-backoff path.
+        await websocket.close(
+            code=WS_CLOSE_RATE_LIMITED,
+            reason=f"Rate limited. Retry in {exc.retry_after}s.",
+        )
+        return
+
     if user_id is None:
         await websocket.close(
             code=WS_CLOSE_NOT_AUTHENTICATED,
@@ -147,7 +188,7 @@ async def ws_showtime(websocket: WebSocket, showtime_uuid: uuid.UUID) -> None:
         )
         return
 
-    # ── 2. Validate showtime ─────────────────────────────────────────────
+    # ── 3. Validate showtime ─────────────────────────────────────────────
     async with async_session_factory() as db:
         result = await db.execute(
             select(Showtime.id).where(
@@ -162,7 +203,7 @@ async def ws_showtime(websocket: WebSocket, showtime_uuid: uuid.UUID) -> None:
             )
             return
 
-    # ── 3. Accept and confirm ────────────────────────────────────────────
+    # ── 4. Accept and confirm ────────────────────────────────────────────
     await websocket.accept()
     await log.ainfo(
         "ws_connected",
@@ -173,7 +214,7 @@ async def ws_showtime(websocket: WebSocket, showtime_uuid: uuid.UUID) -> None:
         json.dumps({"type": "connected", "showtime_uuid": str(showtime_uuid)})
     )
 
-    # ── 4. Subscribe to Redis channel ────────────────────────────────────
+    # ── 5. Subscribe to Redis channel ────────────────────────────────────
     channel = make_channel(str(showtime_uuid))
     pubsub = websocket.app.state.redis.pubsub()
 
@@ -188,7 +229,7 @@ async def ws_showtime(websocket: WebSocket, showtime_uuid: uuid.UUID) -> None:
             pass
         return
 
-    # ── 5. Forward events until disconnect ───────────────────────────────
+    # ── 6. Forward events until disconnect ───────────────────────────────
     forward_task = asyncio.create_task(_forward_redis_messages(pubsub, websocket))
     receive_task = asyncio.create_task(_receive_client_messages(websocket))
 
@@ -217,7 +258,7 @@ async def ws_showtime(websocket: WebSocket, showtime_uuid: uuid.UUID) -> None:
                     showtime_uuid=str(showtime_uuid),
                 )
     finally:
-        # ── 6. Clean up Redis subscription ───────────────────────────────
+        # ── 7. Clean up Redis subscription ───────────────────────────────
         try:
             await pubsub.unsubscribe(channel)
             await pubsub.aclose()

@@ -99,7 +99,7 @@ async def _cineplex_get(path: str) -> dict:
             )
 
     if resp.status_code != 200:
-        await log.awarn("cineplex_non_200", url=url, status_code=resp.status_code)
+        await log.awarning("cineplex_non_200", url=url, status_code=resp.status_code)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Cineplex API returned status {resp.status_code}.",
@@ -118,8 +118,13 @@ async def fetch_seat_layout(theatre_id: int, showtime_id: int) -> dict:
 
     This data is mostly static — seats don't move — so the caller should cache
     the result in ``showtimes.seat_layout_json``.
+
+    The Cineplex layout endpoint is ``/seat-layout`` (a sibling of
+    ``/seat-availability`` on the same base path).  The earlier ``/seats``
+    guess in CLAUDE.md was never confirmed and returns 404 — verified against
+    the live API on 2026-05-29.
     """
-    return await _cineplex_get(f"/theatre/{theatre_id}/showtime/{showtime_id}/seats")
+    return await _cineplex_get(f"/theatre/{theatre_id}/showtime/{showtime_id}/seat-layout")
 
 
 async def fetch_seat_availability(theatre_id: int, showtime_id: int) -> dict:
@@ -177,16 +182,25 @@ def merge_layout_and_availability(layout_json: dict, availability_json: dict) ->
                 {
                     "id": seat_id,
                     "column": raw_seat["column"],
-                    "label": raw_seat.get("label", seat_id),
-                    "type": raw_seat.get("type", "Standard"),
+                    # `or` (not `.get(k, default)`) so a present-but-null value
+                    # from Cineplex still falls back to a valid string — `.get`
+                    # only uses its default when the key is entirely absent.
+                    "label": raw_seat.get("label") or seat_id,
+                    "type": raw_seat.get("type") or "Standard",
                     "status": statuses.get(seat_id, "Unknown"),
                 }
             )
+        # Aisle / gap rows (empty `seats`) come back from Cineplex with
+        # `label: null`.  `.get("label", default)` returns None for an explicit
+        # null, which breaks the `RowDetail.label: str` schema — so coerce it to
+        # the row number string.  The frontend renders no label for empty rows
+        # anyway, so the exact fallback value is only a safety net.
+        row_number = raw_row.get("number", 0)
         rows.append(
             {
-                "number": raw_row["number"],
-                "physical_number": raw_row.get("physicalNumber", raw_row["number"]),
-                "label": raw_row.get("label", str(raw_row["number"])),
+                "number": row_number,
+                "physical_number": raw_row.get("physicalNumber") or row_number,
+                "label": raw_row.get("label") or str(row_number),
                 "seats": seats,
             }
         )

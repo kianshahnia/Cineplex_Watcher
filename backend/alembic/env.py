@@ -1,11 +1,17 @@
 import asyncio
 from logging.config import fileConfig
+import os
+import sys
 
 from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import settings
 from app.models import Base  # noqa: F401 — registers all models with metadata
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+
+from app.config import settings
 
 config = context.config
 if config.config_file_name is not None:

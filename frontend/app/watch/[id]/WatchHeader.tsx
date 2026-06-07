@@ -61,12 +61,6 @@ export function WatchHeader({ data }: { data: ShowtimeWithSeats }): JSX.Element 
           ) : null}
         </div>
       )}
-
-      <div className={styles.tech}>
-        <span className={styles.techItem}>Theatre {showtime.theatre_id}</span>
-        <span className={styles.techDot} aria-hidden="true" />
-        <span className={styles.techItem}>Showtime {showtime.showtime_id}</span>
-      </div>
     </header>
   );
 }

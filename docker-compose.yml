@@ -41,6 +41,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/cineplex_watcher
       REDIS_URL: redis://redis:6379/0
+      LOG_JSON: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,6 +61,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/cineplex_watcher
       REDIS_URL: redis://redis:6379/0
+      LOG_JSON: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,6 +81,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/cineplex_watcher
       REDIS_URL: redis://redis:6379/0
+      LOG_JSON: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -87,6 +90,20 @@ services:
     volumes:
       - ./backend:/app
     command: celery -A app.tasks.celery_app beat --loglevel=info
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: http://localhost:8000
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      INTERNAL_API_BASE: http://backend:8000
+    depends_on:
+      - backend
 
 volumes:
   pgdata:

@@ -1,7 +1,7 @@
 """Showtimes router — seat map lookup and URL parsing."""
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -17,6 +17,7 @@ from app.schemas.showtimes import (
 )
 from app.services import cineplex as cineplex_service
 from app.services import watches as watch_service
+from app.services.rate_limit import ip_key, limiter
 
 log = structlog.get_logger()
 
@@ -26,10 +27,17 @@ router = APIRouter(prefix="/showtimes", tags=["showtimes"])
 @router.get(
     "/{theatre_id}/{showtime_id}",
     response_model=ShowtimeSeatsResponse,
-    responses={502: {"model": ErrorResponse}},
+    responses={502: {"model": ErrorResponse}, 429: {"model": ErrorResponse}},
     summary="Get merged seat map for a showtime",
 )
+# Per-IP (the endpoint is intentionally unauthenticated for preview).  This
+# is the only handler that calls the upstream Cineplex API on every request
+# — uncontrolled fan-out here is what could get OUR server IP rate-limited
+# or banned upstream.  30/min is comfortable for a real user toggling
+# between a few showtimes; a scraper hits the wall almost immediately.
+@limiter.limit("30/minute", key_func=ip_key)
 async def get_showtime_seats(
+    request: Request,
     theatre_id: int,
     showtime_id: int,
     db: AsyncSession = Depends(get_db),
@@ -83,10 +91,14 @@ async def get_showtime_seats(
 @router.post(
     "/parse-url",
     response_model=ParseUrlResponse,
-    responses={400: {"model": ErrorResponse}},
+    responses={400: {"model": ErrorResponse}, 429: {"model": ErrorResponse}},
     summary="Extract theatre + showtime IDs from a Cineplex URL",
 )
-async def parse_url(body: ParseUrlRequest) -> ParseUrlResponse:
+# Per-IP — pure CPU work (regex parse), no I/O.  Looser limit reflects the
+# low cost per call; the cap is a circuit breaker against runaway clients
+# rather than a meaningful resource gate.
+@limiter.limit("60/minute", key_func=ip_key)
+async def parse_url(request: Request, body: ParseUrlRequest) -> ParseUrlResponse:
     """Parse a user-pasted Cineplex URL and return the IDs the frontend needs
     to call ``GET /showtimes/{theatre_id}/{showtime_id}``.
 

@@ -28,7 +28,6 @@ export function ProcessStrip(): JSX.Element {
       <div className={styles.divider} aria-hidden="true" />
 
       <header className={styles.head}>
-        <span className={styles.kicker}>How it works</span>
         <h2 className={styles.title}>
           Three steps, no accounts required.
         </h2>

@@ -21,6 +21,8 @@ dependencies = [
     "pydantic-settings>=2.7,<3",
     # Auth
     "pyjwt>=2.10,<3",
+    # Rate limiting (Phase 5 Step 2) — built on `limits` with a Redis backend
+    "slowapi>=0.1.9,<1",
     # Notifications
     "resend>=2,<3",
     "twilio>=9,<10",
