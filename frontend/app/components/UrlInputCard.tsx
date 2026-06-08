@@ -1,32 +1,17 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { ApiError, parseShowtimeUrl } from "@/lib/api";
-import { SeatGridMark } from "./SeatGridMark";
+import { NowPlayingCarousel } from "./NowPlayingCarousel";
 import styles from "./UrlInputCard.module.css";
-
-function pad(n: number): string {
-  return n.toString().padStart(2, "0");
-}
 
 export function UrlInputCard(): JSX.Element {
   const router = useRouter();
   const [url, setUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [clock, setClock] = useState("--  --  --");
-
-  useEffect(() => {
-    const fmt = (): string => {
-      const d = new Date();
-      return `${pad(d.getHours())}  ${pad(d.getMinutes())}  ${pad(d.getSeconds())}`;
-    };
-    setClock(fmt());
-    const id = setInterval(() => setClock(fmt()), 1000);
-    return () => clearInterval(id);
-  }, []);
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -113,14 +98,7 @@ export function UrlInputCard(): JSX.Element {
         </div>
 
         <aside className={styles.aside}>
-          <div className={styles.asideMark} aria-hidden="true">
-            <SeatGridMark size="lg" dim />
-          </div>
-
-          <div className={styles.asideFoot}>
-            <div className={styles.asideRule} />
-            <div className={styles.asideClock}>{clock}</div>
-          </div>
+          <NowPlayingCarousel />
         </aside>
       </div>
     </section>

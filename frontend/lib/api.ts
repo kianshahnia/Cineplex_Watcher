@@ -163,6 +163,31 @@ export function verifyMagicLink(token: string): Promise<{ message: string }> {
   );
 }
 
+// --- Movies (landing-page "Now Playing" carousel) -------------------------
+
+export interface NowPlayingMovie {
+  id: number;
+  title: string;
+  poster_url: string;
+  release_date: string | null;
+  vote_average: number;
+  popularity: number;
+  overview: string | null;
+}
+
+/**
+ * Movies currently in theatres (TMDB, region-scoped to Canada on the backend,
+ * ranked by popularity). The backend returns an empty list when TMDB isn't
+ * configured or is unreachable, so callers should treat `[]` as "show the
+ * fallback", not an error.
+ */
+export function getNowPlaying(): Promise<NowPlayingMovie[]> {
+  return api<NowPlayingMovie[]>("/movies/now-playing", {
+    method: "GET",
+    cache: "no-store",
+  });
+}
+
 // --- Seat map -------------------------------------------------------------
 
 export interface SeatDetail {

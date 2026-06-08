@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     vapid_public_key: str = ""
     vapid_claim_email: str = ""
 
+    # Movies (TMDB — landing-page "Now Playing" poster carousel)
+    # The v4 "Read Access Token" (a long JWT) sent as a Bearer header.  Leave
+    # blank to disable the carousel: the endpoint then returns an empty list and
+    # the frontend falls back to the brand motif — same dev-mode-fallback
+    # convention as Resend / Twilio / Web Push.
+    tmdb_api_token: str = ""
+    # ISO-3166-1 region used to scope "now playing" to Canadian release windows.
+    tmdb_region: str = "CA"
+
     # Logging (Phase 5 Step 3)
     # Set LOG_LEVEL=DEBUG to see SQL queries and verbose service output.
     log_level: str = "INFO"
