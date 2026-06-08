@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { ApiError, requestMagicLink } from "@/lib/api";
+import { ApiError, getMe, requestMagicLink } from "@/lib/api";
 import styles from "./EmailLoginCard.module.css";
 
 type Status =
@@ -11,9 +11,32 @@ type Status =
   | { kind: "sent"; message: string; verificationUrl?: string }
   | { kind: "error"; message: string };
 
-export function EmailLoginCard(): JSX.Element {
+// Whether the current visitor has a live session. We start "unknown" and render
+// nothing until `getMe()` resolves — this guarantees a signed-in user never sees
+// a flash of the sign-in card (the card is below the fold, so signed-out users
+// don't perceive the brief delay before it appears).
+type Auth = "unknown" | "signed-in" | "signed-out";
+
+export function EmailLoginCard(): JSX.Element | null {
+  const [auth, setAuth] = useState<Auth>("unknown");
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      try {
+        const user = await getMe();
+        if (active) setAuth(user ? "signed-in" : "signed-out");
+      } catch {
+        // Treat any lookup failure as signed-out so the card stays reachable.
+        if (active) setAuth("signed-out");
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
@@ -38,6 +61,12 @@ export function EmailLoginCard(): JSX.Element {
   }
 
   const isLoading = status.kind === "loading";
+
+  // Hide the entire members card for signed-in visitors (and while we're still
+  // determining the session). Only signed-out visitors get the sign-in form.
+  if (auth !== "signed-out") {
+    return null;
+  }
 
   return (
     <section
