@@ -4,7 +4,7 @@ import { DashboardClient } from "./DashboardClient";
 import styles from "./Dashboard.module.css";
 
 export const metadata = {
-  title: "Watchlist — Cinewatcher",
+  title: "Watchlist — Cinewatch",
 };
 
 export default function DashboardPage(): JSX.Element {

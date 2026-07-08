@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Cinewatcher",
+  title: "Cinewatch",
   description:
-    "Cinewatcher tracks any Cineplex showtime and pings you the second a seat clears through email, SMS, or push.",
+    "Cinewatch tracks any Cineplex showtime and pings you the second a seat clears through email, SMS, or push.",
 };
 
 export default function RootLayout({

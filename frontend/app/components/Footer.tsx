@@ -16,7 +16,7 @@ export function Footer(): JSX.Element {
             a notification companion only.
           </p>
           <div className={styles.meta}>
-            <span className={styles.metaItem}>{year} Cinewatcher</span>
+            <span className={styles.metaItem}>{year} Cinewatch</span>
           </div>
         </div>
       </div>

@@ -118,7 +118,7 @@ export function buildTestShowtimeWithSeats(): ShowtimeWithSeats {
       theatre_id: TEST_THEATRE_ID,
       showtime_id: TEST_SHOWTIME_ID,
       movie_name: "Sample Feature (Test)",
-      theater_name: "Cinewatcher Preview Theatre",
+      theater_name: "Cinewatch Preview Theatre",
       showtime_at: nextWeekendIso(),
       is_active: true,
     },
