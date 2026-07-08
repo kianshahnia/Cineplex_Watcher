@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     jwt_expire_days: int = 7
     magic_link_base_url: str = "http://localhost:3000/auth/verify"
     magic_link_expire_minutes: int = 15
+    # Set true in production (HTTPS only) — browsers silently drop Secure
+    # cookies served over plain http://, so this must stay false in local dev.
+    cookie_secure: bool = False
+
+    # CORS — comma-separated list of browser origins allowed to send
+    # credentialed requests. Production: "https://cinewatch.ca,https://www.cinewatch.ca".
+    cors_origins: str = "http://localhost:3000"
 
     # Email (Resend)
     resend_api_key: str = ""

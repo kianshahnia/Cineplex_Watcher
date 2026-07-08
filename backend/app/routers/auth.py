@@ -147,7 +147,7 @@ async def verify(
         key="session_token",
         value=jwt_token,
         httponly=True,
-        secure=False,  # TODO: set True in production behind HTTPS
+        secure=settings.cookie_secure,
         samesite="lax",
         max_age=settings.jwt_expire_days * 86400,
         path="/",

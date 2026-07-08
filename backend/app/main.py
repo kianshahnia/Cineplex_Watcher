@@ -65,10 +65,12 @@ async def _ensure_rate_limit_state(request, call_next):
     request.state.view_rate_limit = None
     return await call_next(request)
 
-# CORS — allow the Next.js frontend to send cookies cross-origin
+# CORS — allow the Next.js frontend to send cookies cross-origin.
+# Origins come from the CORS_ORIGINS env var (comma-separated) so production
+# domains don't require a code change.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
