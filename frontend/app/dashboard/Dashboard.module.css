@@ -63,40 +63,6 @@
   color: var(--silver);
 }
 
-/* TEST FIXTURE — pill-style button that exits preview mode. */
-.exitTest {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 12px 5px 8px;
-  border: 1px solid rgba(217, 118, 118, 0.32);
-  border-radius: 999px;
-  background: rgba(216, 102, 102, 0.05);
-  color: #e3a1a1;
-  font-family: var(--font-sans);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  transition: border-color 200ms ease, color 200ms ease, background 200ms ease;
-}
-
-.exitTest:hover {
-  border-color: rgba(217, 118, 118, 0.55);
-  background: rgba(216, 102, 102, 0.08);
-  color: #f0bcbc;
-}
-
-.exitTestTag {
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  letter-spacing: 0.22em;
-  color: #d97676;
-  padding: 1px 6px;
-  border: 1px solid rgba(217, 118, 118, 0.45);
-  border-radius: 3px;
-}
-
 .title {
   margin: 0;
   font-family: var(--font-display);

@@ -25,9 +25,6 @@ import {
   useShowtimeEvents,
   type ShowtimeEvent,
 } from "@/hooks/useShowtimeEvents";
-// TEST FIXTURE — used to detect the test showtime and run a fake event emitter
-// instead of opening a real WebSocket. Safe to remove with the test/ folder.
-import { isTestShowtimeUuid } from "@/lib/test/buildLayout";
 import styles from "./WatchInteractive.module.css";
 
 const STORAGE_PREFIX = "cinewatch.selection.";
@@ -229,57 +226,14 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     };
   }, []);
 
-  // TEST FIXTURE — detect the preview showtime so we can swap the live source.
-  const isTest = isTestShowtimeUuid(showtime.id);
-
   // Subscribe for the side effect only — incoming events flip + flash seats on
   // the map via `onLiveEvent`. The connection status is no longer surfaced in
   // the UI, so we don't read the return value.
   useShowtimeEvents({
     showtimeUuid: showtime.id,
-    enabled:
-      showtime.is_active && !initial.is_post_showtime && !isTest,
+    enabled: showtime.is_active && !initial.is_post_showtime,
     onEvent: onLiveEvent,
   });
-
-  // TEST FIXTURE — fake event emitter: when the showtime is the preview one,
-  // every ~6.5s flip a random still-Occupied seat to Available, routed
-  // through the same `onLiveEvent` handler so the UX is identical.
-  const layoutRef = useRef<SeatMapLayout>(layout);
-  useEffect(() => {
-    layoutRef.current = layout;
-  }, [layout]);
-
-  useEffect(() => {
-    if (!isTest) return;
-    const handle = window.setInterval(() => {
-      const occupied: SeatDetail[] = [];
-      for (const row of layoutRef.current.rows) {
-        for (const seat of row.seats) {
-          if (seat.status === "Occupied") occupied.push(seat);
-        }
-      }
-      if (occupied.length === 0) return;
-      const choice = occupied[Math.floor(Math.random() * occupied.length)];
-      if (!choice) return;
-      onLiveEvent({
-        type: "seat_available",
-        showtime_uuid: showtime.id,
-        theatre_id: showtime.theatre_id,
-        showtime_id: showtime.showtime_id,
-        seat_key: choice.id,
-        seat_label: choice.label,
-        detected_at: new Date().toISOString(),
-      });
-    }, 6500);
-    return () => window.clearInterval(handle);
-  }, [
-    isTest,
-    onLiveEvent,
-    showtime.id,
-    showtime.theatre_id,
-    showtime.showtime_id,
-  ]);
 
   // --- derived data -----------------------------------------------------
   const seatLookup = useMemo<Map<string, SeatDetail>>(() => {

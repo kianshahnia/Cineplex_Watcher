@@ -12,8 +12,6 @@ import {
   updateWatch,
 } from "@/lib/api";
 import type { CurrentUser, Watch, WatchStatus } from "@/lib/api";
-// TEST FIXTURE — preview-mode session helpers; see lib/test/fixtures.ts.
-import { clearTestSession, hasTestSession } from "@/lib/test/fixtures";
 import { WatchCard } from "./WatchCard";
 import styles from "./Dashboard.module.css";
 
@@ -255,14 +253,6 @@ function DashboardHeader({
   counts: { all: number; active: number; fulfilled: number };
   userEmail: string | null;
 }): JSX.Element {
-  // TEST FIXTURE — render an "Exit preview" affordance when a fake session
-  // is active, so the developer can leave preview mode without clearing
-  // localStorage by hand.
-  const inTestMode = hasTestSession();
-  const onExitTest = (): void => {
-    clearTestSession();
-    window.location.reload();
-  };
   return (
     <header className={styles.head}>
       <div className={styles.eyebrowRow}>
@@ -273,16 +263,6 @@ function DashboardHeader({
             <span className={styles.identityRule} aria-hidden="true" />
             <span className={styles.identityValue}>{userEmail}</span>
           </span>
-        ) : null}
-        {inTestMode ? (
-          <button
-            type="button"
-            className={styles.exitTest}
-            onClick={onExitTest}
-          >
-            <span className={styles.exitTestTag}>Preview</span>
-            <span>Exit test mode</span>
-          </button>
         ) : null}
       </div>
 

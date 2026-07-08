@@ -4,40 +4,7 @@
  * - Always sends cookies (the FastAPI auth uses an httpOnly session cookie).
  * - Unwraps the standard `{ data, error }` envelope.
  * - Throws an `ApiError` on non-2xx responses or `error` payloads.
- *
- * --------------------------------------------------------------------------
- * TEST FIXTURE — frontend-only preview mode.
- * Each typed helper below is annotated with a "TEST FIXTURE" comment block
- * before the test-only intercept that bypasses the backend.  Remove those
- * blocks (and `frontend/lib/test/`) before shipping to production.
- * --------------------------------------------------------------------------
  */
-
-// TEST FIXTURE — imports for the preview-mode intercepts below.
-import {
-  TEST_EMAIL,
-  TEST_MAGIC_TOKEN,
-  addSeatsToTestWatch,
-  cancelTestWatch,
-  clearTestSession,
-  createTestWatch,
-  getTestSession,
-  hasTestSession,
-  isTestEmail,
-  isTestMagicToken,
-  isTestUrl,
-  listTestWatches,
-  removeTestWatch,
-  seedTestWatchesIfEmpty,
-  setTestSession,
-  updateTestWatch,
-} from "./test/fixtures";
-import {
-  TEST_SHOWTIME_ID,
-  TEST_THEATRE_ID,
-  buildTestShowtimeWithSeats,
-  isTestShowtimeIds,
-} from "./test/buildLayout";
 
 // SSR (server-side) uses INTERNAL_API_BASE to reach the backend via the
 // Docker internal network. Browser code uses the public NEXT_PUBLIC_API_BASE.
@@ -104,17 +71,6 @@ export interface ParsedIds {
 }
 
 export function parseShowtimeUrl(url: string): Promise<ParsedIds> {
-  // ---- TEST FIXTURE ----
-  // If the user pasted the sentinel URL `test_watch.pr`, short-circuit the
-  // backend call and return the test theatre/showtime IDs.
-  if (isTestUrl(url)) {
-    return Promise.resolve({
-      theatre_id: TEST_THEATRE_ID,
-      showtime_id: TEST_SHOWTIME_ID,
-    });
-  }
-  // ---- end TEST FIXTURE ----
-
   return api<ParsedIds>("/showtimes/parse-url", {
     method: "POST",
     body: { url },
@@ -127,17 +83,6 @@ export interface MagicLinkResult {
 }
 
 export function requestMagicLink(email: string): Promise<MagicLinkResult> {
-  // ---- TEST FIXTURE ----
-  // For the sentinel email `watcher@test.pr`, skip Resend / DB and synthesize
-  // the dev-mode response shape (with a verification_url the user can click).
-  if (isTestEmail(email)) {
-    return Promise.resolve({
-      message: "Test magic link generated. Click the link below to verify.",
-      verification_url: `/auth/verify?token=${encodeURIComponent(TEST_MAGIC_TOKEN)}`,
-    });
-  }
-  // ---- end TEST FIXTURE ----
-
   return api<MagicLinkResult>("/auth/login", {
     method: "POST",
     body: { email },
@@ -145,18 +90,6 @@ export function requestMagicLink(email: string): Promise<MagicLinkResult> {
 }
 
 export function verifyMagicLink(token: string): Promise<{ message: string }> {
-  // ---- TEST FIXTURE ----
-  // Sentinel token: establish a fake browser-only session and pre-seed the
-  // dashboard with example watches so first-time previewers see content.
-  if (isTestMagicToken(token)) {
-    setTestSession();
-    seedTestWatchesIfEmpty();
-    return Promise.resolve({
-      message: `Signed in as ${TEST_EMAIL} (test mode).`,
-    });
-  }
-  // ---- end TEST FIXTURE ----
-
   return api<{ message: string }>(
     `/auth/verify?token=${encodeURIComponent(token)}`,
     { method: "GET" },
@@ -232,14 +165,6 @@ export function getShowtimeSeats(
   theatre_id: number,
   showtime_id: number,
 ): Promise<ShowtimeWithSeats> {
-  // ---- TEST FIXTURE ----
-  // Test IDs (99999/99999) skip the backend entirely and return the seat
-  // map converted from `lib/test/cineplex-sample.json`.
-  if (isTestShowtimeIds(theatre_id, showtime_id)) {
-    return Promise.resolve(buildTestShowtimeWithSeats());
-  }
-  // ---- end TEST FIXTURE ----
-
   return api<ShowtimeWithSeats>(
     `/showtimes/${theatre_id}/${showtime_id}`,
     { method: "GET", cache: "no-store" },
@@ -258,14 +183,6 @@ export interface CurrentUser {
 
 /** Returns the current user or null when the session cookie is missing/invalid. */
 export async function getMe(): Promise<CurrentUser | null> {
-  // ---- TEST FIXTURE ----
-  // If a localStorage test session exists, treat it as the current user.
-  // Takes precedence over any real backend session so the preview is
-  // self-contained even when the FastAPI app happens to be running.
-  const session = getTestSession();
-  if (session) return session.user;
-  // ---- end TEST FIXTURE ----
-
   try {
     return await api<CurrentUser>("/auth/me", {
       method: "GET",
@@ -321,12 +238,6 @@ export interface Watch {
 export function listWatches(
   statusFilter: WatchStatus | "all" = "active",
 ): Promise<Watch[]> {
-  // ---- TEST FIXTURE ----
-  if (hasTestSession()) {
-    return Promise.resolve(listTestWatches(statusFilter));
-  }
-  // ---- end TEST FIXTURE ----
-
   return api<Watch[]>(
     `/watches?status=${encodeURIComponent(statusFilter)}`,
     { method: "GET", cache: "no-store" },
@@ -341,12 +252,6 @@ export function createWatch(args: {
   /** Naive ISO (`YYYY-MM-DDTHH:MM:SS`) theatre-local wall-clock, or null. */
   showtime_at?: string | null;
 }): Promise<Watch> {
-  // ---- TEST FIXTURE ----
-  if (hasTestSession()) {
-    return Promise.resolve(createTestWatch(args));
-  }
-  // ---- end TEST FIXTURE ----
-
   return api<Watch>("/watches", { method: "POST", body: args });
 }
 
@@ -364,16 +269,6 @@ export function updateWatch(
   watch_id: string,
   updates: WatchUpdate,
 ): Promise<Watch> {
-  // ---- TEST FIXTURE ----
-  if (hasTestSession()) {
-    const updated = updateTestWatch(watch_id, updates);
-    if (!updated) {
-      return Promise.reject(new ApiError("Test watch not found.", 404));
-    }
-    return Promise.resolve(updated);
-  }
-  // ---- end TEST FIXTURE ----
-
   return api<Watch>(`/watches/${watch_id}`, {
     method: "PATCH",
     body: updates,
@@ -389,16 +284,6 @@ export function addSeatsToWatch(
   watch_id: string,
   seats: SeatToWatch[],
 ): Promise<Watch> {
-  // ---- TEST FIXTURE ----
-  if (hasTestSession()) {
-    const updated = addSeatsToTestWatch(watch_id, seats);
-    if (!updated) {
-      return Promise.reject(new ApiError("Test watch not found.", 404));
-    }
-    return Promise.resolve(updated);
-  }
-  // ---- end TEST FIXTURE ----
-
   return api<Watch>(`/watches/${watch_id}/seats`, {
     method: "POST",
     body: { seats },
@@ -406,31 +291,11 @@ export function addSeatsToWatch(
 }
 
 export function cancelWatch(watch_id: string): Promise<Watch> {
-  // ---- TEST FIXTURE ----
-  if (hasTestSession()) {
-    const updated = cancelTestWatch(watch_id);
-    if (!updated) {
-      return Promise.reject(new ApiError("Test watch not found.", 404));
-    }
-    return Promise.resolve(updated);
-  }
-  // ---- end TEST FIXTURE ----
-
   return api<Watch>(`/watches/${watch_id}`, { method: "DELETE" });
 }
 
 /** Permanently delete a watch (hard delete, any status). */
 export function removeWatch(watch_id: string): Promise<{ message: string }> {
-  // ---- TEST FIXTURE ----
-  if (hasTestSession()) {
-    const ok = removeTestWatch(watch_id);
-    if (!ok) {
-      return Promise.reject(new ApiError("Test watch not found.", 404));
-    }
-    return Promise.resolve({ message: "Watch removed." });
-  }
-  // ---- end TEST FIXTURE ----
-
   return api<{ message: string }>(`/watches/${watch_id}/remove`, {
     method: "DELETE",
   });
@@ -438,14 +303,6 @@ export function removeWatch(watch_id: string): Promise<{ message: string }> {
 
 // --- Sign out -------------------------------------------------------------
 
-/** Clear the session. In preview mode this just drops the localStorage session. */
 export function logout(): Promise<{ message: string }> {
-  // ---- TEST FIXTURE ----
-  if (hasTestSession()) {
-    clearTestSession();
-    return Promise.resolve({ message: "Logged out." });
-  }
-  // ---- end TEST FIXTURE ----
-
   return api<{ message: string }>("/auth/logout", { method: "POST" });
 }
