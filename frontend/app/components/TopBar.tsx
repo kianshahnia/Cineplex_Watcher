@@ -8,7 +8,7 @@ export function TopBar(): JSX.Element {
   return (
     <header className={styles.bar} aria-label="Site header">
       <div className={`${styles.inner} container`}>
-        <Link href="/" className={styles.brand} aria-label="Cinewatcher — home">
+        <Link href="/" className={styles.brand} aria-label="Cinewatch — home">
           <Wordmark size="sm" />
         </Link>
         <nav className={styles.nav} aria-label="Primary">

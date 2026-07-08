@@ -38,7 +38,7 @@ import {
 
 export const TEST_URL = "test_watch.pr";
 export const TEST_EMAIL = "watcher@test.pr";
-export const TEST_MAGIC_TOKEN = "cinewatcher-test-magic-token";
+export const TEST_MAGIC_TOKEN = "cinewatch-test-magic-token";
 
 export const TEST_USER: CurrentUser = {
   id: "00000000-0000-0000-0000-0000000000aa",
@@ -48,8 +48,8 @@ export const TEST_USER: CurrentUser = {
   created_at: "2026-05-01T12:00:00.000Z",
 };
 
-const SESSION_KEY = "cinewatcher.test.session";
-const WATCHES_KEY = "cinewatcher.test.watches";
+const SESSION_KEY = "cinewatch.test.session";
+const WATCHES_KEY = "cinewatch.test.watches";
 
 // --- Predicates -----------------------------------------------------------
 
@@ -192,7 +192,7 @@ export function createTestWatch(args: {
       theatre_id: args.theatre_id,
       showtime_id: args.showtime_id,
       movie_name: "Sample Feature (Test)",
-      theater_name: "Cinewatcher Preview Theatre",
+      theater_name: "Cinewatch Preview Theatre",
       showtime_at: null,
       is_active: true,
     },
@@ -296,7 +296,7 @@ export function seedTestWatchesIfEmpty(): void {
         theatre_id: 1151,
         showtime_id: 88110,
         movie_name: "A Past Showtime (Test)",
-        theater_name: "Cinewatcher Archive",
+        theater_name: "Cinewatch Archive",
         showtime_at: fulfilledAt,
         is_active: false,
       },

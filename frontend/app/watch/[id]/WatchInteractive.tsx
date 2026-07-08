@@ -30,7 +30,7 @@ import {
 import { isTestShowtimeUuid } from "@/lib/test/buildLayout";
 import styles from "./WatchInteractive.module.css";
 
-const STORAGE_PREFIX = "cinewatcher.selection.";
+const STORAGE_PREFIX = "cinewatch.selection.";
 
 type AuthState =
   | { kind: "loading" }
