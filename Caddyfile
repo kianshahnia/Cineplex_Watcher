@@ -1,0 +1,17 @@
+{
+	email kianshahnia@gmail.com
+}
+
+www.cinewatch.ca {
+	redir https://cinewatch.ca{uri} permanent
+}
+
+cinewatch.ca {
+	encode gzip
+	reverse_proxy frontend:3000
+}
+
+api.cinewatch.ca {
+	encode gzip
+	reverse_proxy backend:8000
+}
