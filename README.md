@@ -87,7 +87,7 @@ A few behaviours are env-driven with sensible defaults:
 
 **Phase 4 - Complete.** Next.js frontend: landing page with URL input and magic-link login, an interactive seat map (click and drag-to-paint selection), watch creation that survives the sign-in roundtrip, a watchlist dashboard, and live seat updates over WebSocket. Watches can be named and given a screening date/time via a custom drum-wheel picker.
 
-**Phase 5 - In progress.** Polish and deploy: frontend Dockerization, API rate limiting, and structured request logging are done. Deployment is the remaining step.
+**Phase 5 - In progress.** Deployed!
 
 ## License
 
