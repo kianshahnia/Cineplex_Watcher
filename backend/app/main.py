@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
 from app.logging_config import configure_logging, log_requests
-from app.routers import auth, movies, showtimes, watches, ws
+from app.routers import admin, auth, movies, showtimes, watches, ws
 from app.services.rate_limit import limiter, rate_limit_exceeded_handler
 from app.services.redis_client import create_async_redis
 
@@ -90,6 +90,7 @@ app.include_router(watches.router)
 app.include_router(showtimes.router)
 app.include_router(movies.router)
 app.include_router(ws.router)
+app.include_router(admin.router)
 
 
 @app.get("/health")

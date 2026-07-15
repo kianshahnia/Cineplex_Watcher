@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     # credentialed requests. Production: "https://cinewatch.ca,https://www.cinewatch.ca".
     cors_origins: str = "http://localhost:3000"
 
+    # Admin — comma-separated list of emails allowed to hit /admin/* endpoints
+    # (e.g. the usage-metrics dashboard). Matched case-insensitively against the
+    # signed-in user's email. Empty (the default) means NO ONE is an admin — the
+    # endpoints stay locked until you explicitly list your email here. Fail-closed
+    # on purpose: a misconfigured/forgotten setting denies access rather than
+    # exposing metrics to every logged-in user.
+    admin_emails: str = ""
+
     # Email (Resend)
     resend_api_key: str = ""
     from_email: str = "alerts@yourdomain.com"

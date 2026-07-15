@@ -178,3 +178,40 @@ async def get_current_user(
         )
 
     return user
+
+
+# ---------------------------------------------------------------------------
+# FastAPI dependency — require the current user to be an admin
+# ---------------------------------------------------------------------------
+
+
+def _admin_emails() -> set[str]:
+    """Parse the comma-separated ADMIN_EMAILS setting into a normalised set.
+
+    Lower-cased + stripped so it matches how user emails are stored (see
+    :func:`get_or_create_user`). An empty setting yields an empty set — meaning
+    *no one* is an admin, the safe default.
+    """
+    return {e.lower().strip() for e in settings.admin_emails.split(",") if e.strip()}
+
+
+async def get_current_admin(user: User = Depends(get_current_user)) -> User:
+    """FastAPI dependency: like :func:`get_current_user`, but 403s non-admins.
+
+    Composes ``get_current_user`` (which authenticates via the session cookie
+    and raises 401 if that fails), then checks the resolved email against the
+    ADMIN_EMAILS allow-list. An empty allow-list denies everyone, so admin
+    access is opt-in per email.
+
+    Usage in a router:
+        @router.get("/admin/thing")
+        async def thing(admin: User = Depends(get_current_admin)):
+            ...
+    """
+    admins = _admin_emails()
+    if not admins or user.email.lower().strip() not in admins:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required.",
+        )
+    return user
