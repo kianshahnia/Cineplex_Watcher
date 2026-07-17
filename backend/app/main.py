@@ -93,7 +93,9 @@ app.include_router(ws.router)
 app.include_router(admin.router)
 
 
-@app.get("/health")
+# GET + HEAD: uptime monitors (e.g. UptimeRobot) default to HEAD, and HEAD is
+# the conventional lightweight liveness check — a GET-only route 405s on it.
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health() -> dict[str, str]:
     # Intentionally NOT rate-limited — used by Docker / orchestrators for
     # liveness probes that fire on a tight interval.
