@@ -75,5 +75,13 @@ class Settings(BaseSettings):
     # ONLY when deployed behind a proxy you control (Railway, Fly, Cloudflare).
     rate_limit_trust_forwarded_for: bool = False
 
+    # Monitoring — poll-cycle dead-man's-switch (healthchecks.io or similar).
+    # The poller GETs this URL after every successful cycle; if pings stop
+    # (worker crashed / OOM'd), the external monitor alerts us. This closes the
+    # blind spot that /health can't see — the API can be up while the Celery
+    # worker is dead. Blank (the default) disables the ping: same dev-mode
+    # no-op convention as Resend / Twilio / TMDB.
+    healthcheck_ping_url: str = ""
+
 
 settings = Settings()

@@ -246,6 +246,30 @@ async def _run_poll_cycle(r) -> None:
                 continue  # Not due yet — skip silently
         await _poll_showtime(r, showtime)
 
+    # Dead-man's-switch: signal the external monitor that a full cycle
+    # completed. Reached only if the loop above didn't raise, so a poller that
+    # is crash-looping stops pinging and the monitor alerts. See
+    # settings.healthcheck_ping_url.
+    await _ping_healthcheck()
+
+
+async def _ping_healthcheck() -> None:
+    """Best-effort dead-man's-switch ping after a successful poll cycle.
+
+    GETs ``settings.healthcheck_ping_url`` (healthchecks.io or similar) so an
+    external monitor knows the poller is alive; when pings stop it alerts us.
+    This is the one signal ``/health`` can't give — the API stays up even if the
+    Celery worker dies. Never raises: a monitoring ping must not break polling.
+    Blank URL = disabled (dev-mode no-op).
+    """
+    url = settings.healthcheck_ping_url
+    if not url:
+        return
+    try:
+        await asyncio.to_thread(httpx.get, url, timeout=10)
+    except Exception as exc:
+        await log.awarning("healthcheck_ping_failed", error=str(exc))
+
 
 async def _poll_showtime(r, showtime: Showtime) -> None:
     """Poll a single showtime: fetch → diff → persist → publish → notify."""
