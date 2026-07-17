@@ -19,10 +19,16 @@ boundaries.
 
 Flow per poll cycle
 -------------------
-1. Load all active showtimes from the DB.
+Steps 3–9 run per showtime with **bounded concurrency** (``POLL_CONCURRENCY``
+coroutines at a time, via an ``asyncio.Semaphore`` + ``asyncio.gather``) over a
+single shared keep-alive ``httpx.Client``, so a ~140-showtime cycle finishes in
+~10 s instead of ~60 s sequential while never bursting more than a handful of
+requests at Cineplex at once.
+
+1. Load all active *watched* showtimes from the DB.
 2. Skip showtimes that were polled recently (within their interval).
-3. Fetch the current seat availability from the Cineplex API (sync httpx,
-   run in a thread pool via ``asyncio.to_thread``).
+3. Fetch the current seat availability from the Cineplex API on the shared
+   ``httpx.Client`` (sync, run in a thread pool via ``asyncio.to_thread``).
 4. Diff against the previous availability snapshot stored in Redis.
 5. For every seat that changed:
    - Record a ``SeatEvent`` row in the DB.
@@ -39,6 +45,7 @@ Flow per poll cycle
 
 import asyncio
 import json
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -76,6 +83,32 @@ from app.tasks.celery_app import celery
 log = structlog.get_logger()
 
 CINEPLEX_API_BASE = "https://apis.cineplex.com/prod/ticketing/api/v1"
+
+# How many showtimes to poll concurrently within a single cycle. Bounded so we
+# never burst the whole showtime list at Cineplex at once (which would look like
+# an attack to the Imperva WAF and blow the per-IP request budget — see
+# docs/scaling.md Finding 2). At 5, a ~140-showtime cycle that ran ~60 s
+# strictly-sequentially collapses to ~10 s while peaking at only 5 in-flight
+# upstream requests. Raise cautiously; the ceiling is WAF tolerance, not CPU.
+POLL_CONCURRENCY = 5
+
+# One real, stable User-Agent instead of httpx's default ``python-httpx/x.y``.
+# It's honest (identifies the app + a contact URL) rather than a spoofed browser
+# string — Imperva filters on datacenter-IP reputation, so faking a browser UA
+# does nothing (proven during the Hetzner→OVH migration), but a self-identifying
+# UA is good-citizen and less obviously bot-like than the library default.
+_USER_AGENT = "Cinewatch/1.0 (+https://cinewatch.ca)"
+
+# Connection-pool limits for the per-cycle shared client. With POLL_CONCURRENCY
+# fetches in flight, ≤5 sockets are ever open; keepalive_expiry (30 s) keeps them
+# warm across the whole cycle so seat polls reuse connections instead of paying a
+# fresh TCP+TLS handshake (~300–800 ms) every request.
+_HTTP_LIMITS = httpx.Limits(
+    max_connections=POLL_CONCURRENCY * 2,
+    max_keepalive_connections=POLL_CONCURRENCY,
+    keepalive_expiry=30.0,
+)
+_HTTP_TIMEOUT = 15.0
 
 # ---------------------------------------------------------------------------
 # Celery-specific SQLAlchemy engine (NullPool — no connection reuse across
@@ -117,15 +150,19 @@ def get_poll_interval(showtime_at: datetime | None) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _fetch_availability_sync(theatre_id: int, showtime_id: int) -> dict:
-    """Fetch seat availability synchronously.
+def _fetch_availability_sync(
+    client: httpx.Client, theatre_id: int, showtime_id: int
+) -> dict:
+    """Fetch seat availability synchronously on the shared cycle client.
 
     Intended to be called via ``asyncio.to_thread`` so the event loop is
-    not blocked during network I/O.  Raises ``httpx.HTTPStatusError`` on
-    non-2xx responses.
+    not blocked during network I/O.  ``httpx.Client`` is thread-safe, so the
+    same client is reused concurrently across the cycle's poll threads —
+    reusing keep-alive connections instead of a cold handshake per request.
+    Raises ``httpx.HTTPStatusError`` on non-2xx responses.
     """
     url = f"{CINEPLEX_API_BASE}/theatre/{theatre_id}/showtime/{showtime_id}/seat-availability"
-    resp = httpx.get(url, timeout=15)
+    resp = client.get(url)
     resp.raise_for_status()
     return resp.json()
 
@@ -258,17 +295,53 @@ async def _run_poll_cycle(r) -> None:
     # Count reflects only active showtimes that still have ≥1 active watch
     # (zero-watch showtimes are filtered out by the query above).
     await log.ainfo("poll_cycle_start", watched_showtimes=len(showtimes))
+    cycle_start = time.monotonic()
 
+    # Select the showtimes actually due for a refresh this cycle (their
+    # per-showtime poll_interval_sec has elapsed). The interval gate is unchanged
+    # from the old sequential loop — only the dispatch below is now concurrent.
     now = datetime.now(timezone.utc)
+    due: list[Showtime] = []
     for showtime in showtimes:
         if showtime.last_polled_at is not None:
             elapsed = (now - showtime.last_polled_at).total_seconds()
             if elapsed < showtime.poll_interval_sec:
                 continue  # Not due yet — skip silently
-        await _poll_showtime(r, showtime)
+        due.append(showtime)
+
+    # Poll due showtimes with bounded concurrency instead of strictly one at a
+    # time. asyncio.Semaphore caps how many _poll_showtime coroutines fetch
+    # upstream simultaneously (POLL_CONCURRENCY), and a single shared
+    # httpx.Client keeps connections warm across them. This is a pure
+    # performance change: each showtime is still polled exactly once, in
+    # isolation (no two coroutines touch the same showtime row), so ordering
+    # doesn't matter.
+    sem = asyncio.Semaphore(POLL_CONCURRENCY)
+    with httpx.Client(
+        headers={"User-Agent": _USER_AGENT},
+        timeout=_HTTP_TIMEOUT,
+        limits=_HTTP_LIMITS,
+    ) as client:
+
+        async def _guarded(st: Showtime) -> None:
+            async with sem:
+                await _poll_showtime(r, client, st)
+
+        # Plain gather (no return_exceptions): an unexpected error still
+        # propagates out to poll_seats() and triggers its Celery retry, matching
+        # the old sequential behaviour. Expected Cineplex fetch failures are
+        # already caught inside _poll_showtime and never reach here.
+        await asyncio.gather(*(_guarded(st) for st in due))
+
+    await log.ainfo(
+        "poll_cycle_complete",
+        watched_showtimes=len(showtimes),
+        polled=len(due),
+        elapsed_sec=round(time.monotonic() - cycle_start, 1),
+    )
 
     # Dead-man's-switch: signal the external monitor that a full cycle
-    # completed. Reached only if the loop above didn't raise, so a poller that
+    # completed. Reached only if the polling above didn't raise, so a poller that
     # is crash-looping stops pinging and the monitor alerts. See
     # settings.healthcheck_ping_url.
     await _ping_healthcheck()
@@ -292,7 +365,7 @@ async def _ping_healthcheck() -> None:
         await log.awarning("healthcheck_ping_failed", error=str(exc))
 
 
-async def _poll_showtime(r, showtime: Showtime) -> None:
+async def _poll_showtime(r, client: httpx.Client, showtime: Showtime) -> None:
     """Poll a single showtime: fetch → diff → persist → publish → notify."""
     await log.ainfo(
         "polling_showtime",
@@ -305,6 +378,7 @@ async def _poll_showtime(r, showtime: Showtime) -> None:
     try:
         availability: dict = await asyncio.to_thread(
             _fetch_availability_sync,
+            client,
             showtime.theatre_id,
             showtime.showtime_id,
         )
