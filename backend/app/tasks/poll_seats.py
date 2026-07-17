@@ -45,7 +45,7 @@ from datetime import datetime, timezone
 
 import httpx
 import structlog
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import selectinload
 from sqlalchemy.pool import NullPool
@@ -230,13 +230,34 @@ async def _poll_all_showtimes() -> None:
 
 
 async def _run_poll_cycle(r) -> None:
-    """Run one full poll cycle across all active showtimes (lock already held)."""
+    """Run one full poll cycle across active, *watched* showtimes (lock held).
+
+    A showtime is only polled if it has at least one **active** watch. A
+    showtime whose watches were all cancelled, removed, expired, or marked
+    ``fulfilled`` still has ``is_active = True`` but nobody is waiting on it, so
+    polling it is pure wasted upstream volume (Cineplex request budget is the
+    existential constraint — see docs/scaling.md Finding 2). The correlated
+    ``EXISTS`` sub-query below drops those from the cycle entirely; if a new
+    watch is later created for such a showtime, polling resumes automatically on
+    the next cycle (no row is deactivated, so nothing needs re-enabling).
+    """
     async with _session_factory() as db:
-        stmt = select(Showtime).where(Showtime.is_active.is_(True))
+        stmt = (
+            select(Showtime)
+            .where(Showtime.is_active.is_(True))
+            .where(
+                exists().where(
+                    Watch.showtime_id == Showtime.id,
+                    Watch.status == "active",
+                )
+            )
+        )
         result = await db.execute(stmt)
         showtimes = list(result.scalars().all())
 
-    await log.ainfo("poll_cycle_start", active_showtimes=len(showtimes))
+    # Count reflects only active showtimes that still have ≥1 active watch
+    # (zero-watch showtimes are filtered out by the query above).
+    await log.ainfo("poll_cycle_start", watched_showtimes=len(showtimes))
 
     now = datetime.now(timezone.utc)
     for showtime in showtimes:
@@ -590,6 +611,32 @@ async def _send_notifications(jobs: list[_NotifyJob]) -> None:
                             notified_at=now,
                         )
                     )
+
+        # ---- Mark fully-delivered watches as 'fulfilled' ----
+        # A specific-seat watch whose every tracked seat has now been notified
+        # has nothing left to deliver. Marking it 'fulfilled' drops it from the
+        # active set, so once *all* of a showtime's watches are fulfilled (or
+        # removed) the zero-watch skip in _run_poll_cycle stops polling that
+        # showtime — cutting upstream volume (docs/scaling.md Finding 2). It also
+        # fixes the /admin/stats fulfilled count, which is otherwise always 0.
+        #
+        # notify_any_seat watches are EXCLUDED: they have no fixed target set, so
+        # any future seat release is still worth an alert — they're never "done".
+        # The SELECT below autoflushes the notified_at writes above, and the
+        # session's identity map means the just-stamped rows report their new
+        # notified_at here.
+        for watch_id in {job.watch_id for job in sent_jobs}:
+            watch = await db.get(Watch, watch_id)
+            if watch is None or watch.status != "active" or watch.notify_any_seat:
+                continue
+            seats_result = await db.execute(
+                select(WatchedSeat).where(WatchedSeat.watch_id == watch_id)
+            )
+            tracked_seats = list(seats_result.scalars().all())
+            if tracked_seats and all(s.notified_at is not None for s in tracked_seats):
+                watch.status = "fulfilled"
+                await log.ainfo("watch_fulfilled", watch_uuid=str(watch_id))
+
         await db.commit()
 
 
