@@ -15,6 +15,7 @@ without querying the Cineplex API a second time.
 """
 
 import json
+import uuid
 from datetime import datetime, timezone
 
 import redis.asyncio as aioredis
@@ -116,3 +117,68 @@ async def publish_seat_event(
         seat_key=seat_key,
         seat_label=seat_label,
     )
+
+
+# ---------------------------------------------------------------------------
+# Single-flight poll lock
+# ---------------------------------------------------------------------------
+#
+# Celery beat fires the poll task every 30 s, but a full poll cycle can take
+# longer than that (~40-90 s at ~100 showtimes). On the 2-process prefork
+# worker pool this means two (or more) cycles would otherwise run
+# concurrently — duplicating every upstream Cineplex request and opening a
+# narrow window where two cycles both decide a seat is newly-available and
+# both send a notification (``watched_seats.notified_at`` is only stamped
+# *after* the send). This lock makes the cycle single-flight: at most one runs
+# at a time; any beat tick that fires while a cycle is in progress acquires
+# nothing and skips.
+
+POLL_LOCK_KEY = "lock:poll_seats"
+
+# The lock auto-expires after this many seconds so a worker that crashes
+# mid-cycle (without releasing) can't wedge polling forever. It MUST exceed the
+# worst-case cycle duration — otherwise the lock would lapse mid-cycle and let
+# a second cycle start, defeating the purpose. Current worst case is ~90 s;
+# 300 s leaves generous headroom. (Once bounded-concurrency polling lands and
+# cycle time drops to ~10 s, this could safely be lowered.)
+POLL_LOCK_TTL_SEC = 300
+
+# Ownership-safe release: only delete the lock if the stored token still
+# matches ours. Without this compare-and-delete, a cycle that overran the TTL
+# (so its lock already expired and was re-acquired by a newer cycle) could
+# delete the *newer* cycle's lock on its way out. Running it as a Lua script
+# keeps the GET + DEL atomic on the Redis server.
+_RELEASE_LOCK_LUA = """
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('del', KEYS[1])
+else
+    return 0
+end
+"""
+
+
+async def acquire_poll_lock(r: aioredis.Redis) -> str | None:
+    """Try to acquire the global single-flight poll lock (non-blocking).
+
+    Returns a unique token if the lock was acquired, or ``None`` if another
+    cycle already holds it. Built on ``SET key token NX EX ttl`` — Redis's
+    canonical distributed-lock primitive: atomically set the key *only if it
+    does not exist* (``NX``) and attach an expiry (``EX``) in one round trip.
+    The returned token must be passed back to :func:`release_poll_lock`.
+    """
+    token = uuid.uuid4().hex
+    acquired = await r.set(POLL_LOCK_KEY, token, nx=True, ex=POLL_LOCK_TTL_SEC)
+    return token if acquired else None
+
+
+async def release_poll_lock(r: aioredis.Redis, token: str) -> None:
+    """Release the poll lock iff we still own it (token match).
+
+    A failed release is non-fatal: the lock's TTL guarantees it is eventually
+    freed regardless, so we log and swallow rather than propagate (which would
+    otherwise mask the real outcome of the poll cycle).
+    """
+    try:
+        await r.eval(_RELEASE_LOCK_LUA, 1, POLL_LOCK_KEY, token)
+    except Exception as exc:  # pragma: no cover - defensive
+        await log.awarning("poll_lock_release_failed", error=str(exc))

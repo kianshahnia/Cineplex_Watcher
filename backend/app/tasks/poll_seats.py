@@ -65,9 +65,11 @@ from app.services.notifications import (
 )
 from app.services.redis_client import (
     SNAPSHOT_TTL_SEC,
+    acquire_poll_lock,
     create_async_redis,
     make_snapshot_key,
     publish_seat_event,
+    release_poll_lock,
 )
 from app.tasks.celery_app import celery
 
@@ -204,25 +206,45 @@ class _NotifyJob:
 
 
 async def _poll_all_showtimes() -> None:
-    """Run one full poll cycle across all active showtimes."""
+    """Acquire the single-flight lock, then run one poll cycle.
+
+    Guarded by a global Redis lock (see :func:`acquire_poll_lock`) so only one
+    cycle runs at a time. Celery beat fires every 30 s but a full cycle can
+    take longer; without the lock two cycles would run concurrently on the
+    prefork pool, duplicating upstream Cineplex requests and risking duplicate
+    notifications. If a beat tick fires while a cycle is already running it logs
+    ``poll_cycle_skipped_locked`` and returns immediately.
+    """
     r = create_async_redis()
     try:
-        async with _session_factory() as db:
-            stmt = select(Showtime).where(Showtime.is_active.is_(True))
-            result = await db.execute(stmt)
-            showtimes = list(result.scalars().all())
-
-        await log.ainfo("poll_cycle_start", active_showtimes=len(showtimes))
-
-        now = datetime.now(timezone.utc)
-        for showtime in showtimes:
-            if showtime.last_polled_at is not None:
-                elapsed = (now - showtime.last_polled_at).total_seconds()
-                if elapsed < showtime.poll_interval_sec:
-                    continue  # Not due yet — skip silently
-            await _poll_showtime(r, showtime)
+        token = await acquire_poll_lock(r)
+        if token is None:
+            await log.ainfo("poll_cycle_skipped_locked")
+            return
+        try:
+            await _run_poll_cycle(r)
+        finally:
+            await release_poll_lock(r, token)
     finally:
         await r.aclose()
+
+
+async def _run_poll_cycle(r) -> None:
+    """Run one full poll cycle across all active showtimes (lock already held)."""
+    async with _session_factory() as db:
+        stmt = select(Showtime).where(Showtime.is_active.is_(True))
+        result = await db.execute(stmt)
+        showtimes = list(result.scalars().all())
+
+    await log.ainfo("poll_cycle_start", active_showtimes=len(showtimes))
+
+    now = datetime.now(timezone.utc)
+    for showtime in showtimes:
+        if showtime.last_polled_at is not None:
+            elapsed = (now - showtime.last_polled_at).total_seconds()
+            if elapsed < showtime.poll_interval_sec:
+                continue  # Not due yet — skip silently
+        await _poll_showtime(r, showtime)
 
 
 async def _poll_showtime(r, showtime: Showtime) -> None:
