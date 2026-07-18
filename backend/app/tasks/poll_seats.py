@@ -38,9 +38,12 @@ requests at Cineplex at once.
    (skipping users who haven't opted in to email and seats already notified).
 7. Save the new availability snapshot to Redis and update the showtime's
    adaptive interval / ``last_polled_at``, then commit.
-8. Send queued emails via ``asyncio.to_thread`` (Resend SDK is sync).
-9. In a second transaction, mark ``notified_at`` for sent emails and create
-   ``watched_seats`` rows for ``notify_any_seat`` watches so we don't re-send.
+8. Enqueue a separate ``tasks.send_notifications`` Celery task with the batch,
+   then return. That task (not the poll cycle) does the blocking email/SMS/push
+   delivery and, in its own transaction, marks ``notified_at`` / creates
+   ``watched_seats`` rows for ``notify_any_seat`` watches / marks fully-delivered
+   watches ``fulfilled``. Keeping delivery off the poll path stops one popular
+   showtime's alert fan-out from stalling every other showtime's poll.
 """
 
 import asyncio
@@ -208,6 +211,25 @@ class _CandidateSeat:
     # and we'll create it (with notified_at set) after the email sends.
     watched_seat_id: uuid.UUID | None
 
+    def to_dict(self) -> dict:
+        """JSON-safe form for the Celery ``send_notifications`` task payload."""
+        return {
+            "seat_key": self.seat_key,
+            "seat_label": self.seat_label,
+            "watched_seat_id": (
+                str(self.watched_seat_id) if self.watched_seat_id else None
+            ),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "_CandidateSeat":
+        wsid = d["watched_seat_id"]
+        return cls(
+            seat_key=d["seat_key"],
+            seat_label=d["seat_label"],
+            watched_seat_id=uuid.UUID(wsid) if wsid else None,
+        )
+
 
 @dataclass
 class _NotifyJob:
@@ -235,6 +257,47 @@ class _NotifyJob:
     theatre_id: int
     showtime_id: int
     candidate_seats: list[_CandidateSeat]
+
+    def to_dict(self) -> dict:
+        """JSON-safe form for the Celery ``send_notifications`` task payload.
+
+        Celery is configured with the JSON serializer (see celery_app.py), so a
+        job crossing the task boundary must contain only JSON primitives. UUIDs
+        become strings and the datetime becomes an ISO-8601 string;
+        ``user_push_subscription`` is already a plain dict from the JSONB column.
+        """
+        return {
+            "watch_id": str(self.watch_id),
+            "user_email": self.user_email,
+            "user_phone": self.user_phone,
+            "user_push_subscription": self.user_push_subscription,
+            "user_notify_via": self.user_notify_via,
+            "watch_name": self.watch_name,
+            "movie_name": self.movie_name,
+            "theater_name": self.theater_name,
+            "showtime_at": self.showtime_at.isoformat() if self.showtime_at else None,
+            "theatre_id": self.theatre_id,
+            "showtime_id": self.showtime_id,
+            "candidate_seats": [c.to_dict() for c in self.candidate_seats],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "_NotifyJob":
+        sa = d["showtime_at"]
+        return cls(
+            watch_id=uuid.UUID(d["watch_id"]),
+            user_email=d["user_email"],
+            user_phone=d["user_phone"],
+            user_push_subscription=d["user_push_subscription"],
+            user_notify_via=d["user_notify_via"],
+            watch_name=d["watch_name"],
+            movie_name=d["movie_name"],
+            theater_name=d["theater_name"],
+            showtime_at=datetime.fromisoformat(sa) if sa else None,
+            theatre_id=d["theatre_id"],
+            showtime_id=d["showtime_id"],
+            candidate_seats=[_CandidateSeat.from_dict(c) for c in d["candidate_seats"]],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -579,9 +642,24 @@ async def _poll_showtime(r, client: httpx.Client, showtime: Showtime) -> None:
     # --- 5. Persist the new snapshot after a successful DB commit ---
     await r.setex(snapshot_key, SNAPSHOT_TTL_SEC, json.dumps(new_statuses))
 
-    # --- 6. Fire emails outside the write transaction ---
+    # --- 6. Hand notifications off to a separate Celery task ---
+    # Delivery used to be awaited inline here, which meant one showtime releasing
+    # a large seat block (many watchers × email+SMS+push, each a blocking vendor
+    # call) stalled the poll of every remaining showtime while holding this
+    # coroutine's semaphore slot. Now we enqueue the batch and return
+    # immediately: the poll cycle stays fast and bounded, and the separate task
+    # gets Celery retries for free. The snapshot was already advanced above, so a
+    # delayed send never causes re-detection of the same transition on the next
+    # cycle (the diff is snapshot-based, not notified_at-based).
+    #
+    # celery.send_task publishes to the broker by task-name string, avoiding a
+    # forward reference to the task object; the call is quick but does broker
+    # I/O, so run it off the event loop via to_thread.
     if notify_jobs:
-        await _send_notifications(notify_jobs)
+        payload = [job.to_dict() for job in notify_jobs]
+        await asyncio.to_thread(
+            celery.send_task, "tasks.send_notifications", args=[payload]
+        )
 
     await log.ainfo(
         "showtime_polled",
@@ -732,3 +810,39 @@ def poll_seats(self) -> None:
     except Exception as exc:
         log.error("poll_seats_task_failed", error=str(exc))
         raise self.retry(exc=exc, countdown=60)
+
+
+async def _run_send_notifications(jobs_payload: list[dict]) -> None:
+    """Rehydrate a JSON job batch and run the shared send/persist logic."""
+    jobs = [_NotifyJob.from_dict(d) for d in jobs_payload]
+    await _send_notifications(jobs)
+
+
+@celery.task(name="tasks.send_notifications", bind=True, max_retries=3)
+def send_notifications(self, jobs_payload: list[dict]) -> None:
+    """Deliver a batch of seat-available alerts, off the poll cycle's critical path.
+
+    Enqueued by :func:`_poll_showtime` once a poll has committed. It rebuilds the
+    ``_NotifyJob`` batch from its JSON payload and runs the same async
+    send-and-persist logic that used to run inline (:func:`_send_notifications`):
+    dispatch every opted-in channel per user, then in a fresh transaction stamp
+    ``notified_at`` / create ``notify_any_seat`` rows / mark watches
+    ``fulfilled``.
+
+    Splitting this out of the poll task is the whole point: a popular showtime
+    releasing a big seat block (many watchers × email+SMS+push, each a blocking
+    vendor call) no longer stalls the polling of every other showtime.
+
+    Delivery is **at-least-once**. A retry after a partial failure re-sends the
+    whole batch (the send loop doesn't consult ``notified_at`` — only the persist
+    step does, idempotently), so a rare transient vendor/DB error can produce a
+    duplicate message. Steady-state duplicates are still prevented by the
+    snapshot-based diff (a transition is detected once) plus the per-seat
+    ``notified_at`` guard; only actual send/DB exceptions trigger a retry
+    (invalid push subs are swallowed inside the transport and don't).
+    """
+    try:
+        asyncio.run(_run_send_notifications(jobs_payload))
+    except Exception as exc:
+        log.error("send_notifications_task_failed", error=str(exc))
+        raise self.retry(exc=exc, countdown=30)
