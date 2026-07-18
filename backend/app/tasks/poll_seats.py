@@ -61,6 +61,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.pool import NullPool
 
 from app.config import settings
+from app.models.notification import Notification
 from app.models.seat_event import SeatEvent
 from app.models.showtime import Showtime
 from app.models.watch import Watch
@@ -687,8 +688,15 @@ async def _send_notifications(jobs: list[_NotifyJob]) -> None:
     Notification dedup is per-seat, not per-channel — once we've notified
     a user about a seat on *any* channel, ``notified_at`` is stamped and
     we don't re-alert (matching CLAUDE.md "Notification deduplication").
+
+    Every channel attempt (success *or* failure) is also recorded as a
+    ``notifications`` audit-log row in the same persist transaction — the
+    source of truth for real message-send volume (``notified_at`` counts
+    seats, not messages).
     """
     sent_jobs: list[_NotifyJob] = []
+    # (job, channel, ok) per attempted send — becomes one Notification row each.
+    attempts: list[tuple[_NotifyJob, str, bool]] = []
 
     for job in jobs:
         seat_labels = [c.seat_label for c in job.candidate_seats]
@@ -710,6 +718,7 @@ async def _send_notifications(jobs: list[_NotifyJob]) -> None:
                 theatre_id=job.theatre_id,
                 showtime_id=job.showtime_id,
             )
+            attempts.append((job, "email", email_ok))
             any_channel_ok = any_channel_ok or email_ok
 
         if user_wants_sms(job.user_notify_via) and job.user_phone:
@@ -721,6 +730,7 @@ async def _send_notifications(jobs: list[_NotifyJob]) -> None:
                 theatre_id=job.theatre_id,
                 showtime_id=job.showtime_id,
             )
+            attempts.append((job, "sms", sms_ok))
             any_channel_ok = any_channel_ok or sms_ok
 
         if user_wants_push(job.user_notify_via) and job.user_push_subscription:
@@ -732,18 +742,39 @@ async def _send_notifications(jobs: list[_NotifyJob]) -> None:
                 theatre_id=job.theatre_id,
                 showtime_id=job.showtime_id,
             )
+            attempts.append((job, "push", push_ok))
             any_channel_ok = any_channel_ok or push_ok
 
         if any_channel_ok:
             sent_jobs.append(job)
 
-    if not sent_jobs:
+    # Nothing was even attempted (every job filtered out by channel opt-ins) —
+    # no dedup state to write and no audit rows to log.
+    if not sent_jobs and not attempts:
         return
 
     # Persist notified_at in a fresh session so a transient DB error here
     # cannot roll back the seat events / pub/sub state already committed.
     now = datetime.now(timezone.utc)
     async with _session_factory() as db:
+        # ---- Audit-log every channel attempt (success AND failure) ----
+        # One row per message per channel. This is what makes true send volume
+        # countable (/admin/stats "notifications") and comparable against the
+        # Resend dashboard. On an at-least-once task retry the re-sent attempts
+        # get logged again — which is accurate, since they really were re-sent.
+        for job, channel, ok in attempts:
+            db.add(
+                Notification(
+                    watch_id=job.watch_id,
+                    user_email=job.user_email,
+                    channel=channel,
+                    success=ok,
+                    seat_count=len(job.candidate_seats),
+                    theatre_id=job.theatre_id,
+                    showtime_id=job.showtime_id,
+                )
+            )
+
         for job in sent_jobs:
             for cand in job.candidate_seats:
                 if cand.watched_seat_id is not None:

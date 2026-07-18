@@ -50,6 +50,23 @@ class EventStats(BaseModel):
     seat_open_total: int
 
 
+class NotificationStats(BaseModel):
+    """True message-send volume from the ``notifications`` audit log.
+
+    One underlying row per message per channel attempt (written by the
+    ``send_notifications`` Celery task), so ``delivered_total`` counts actual
+    messages — unlike ``SeatStats.notified_total``, which counts seats. The
+    email slice of ``delivered_by_channel`` should match the Resend dashboard.
+    Counts start at migration 004; earlier sends were never recorded.
+    """
+
+    attempted_total: int
+    delivered_total: int
+    delivered_last_7d: int
+    # 'email' / 'sms' / 'push' → delivered message count.
+    delivered_by_channel: dict[str, int]
+
+
 class AdminStatsData(BaseModel):
     """The full metrics snapshot returned inside the envelope's ``data`` key."""
 
@@ -60,6 +77,7 @@ class AdminStatsData(BaseModel):
     showtimes: ShowtimeStats
     seats: SeatStats
     events: EventStats
+    notifications: NotificationStats
 
 
 class AdminStatsResponse(BaseModel):

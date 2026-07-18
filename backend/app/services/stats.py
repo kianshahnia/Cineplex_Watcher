@@ -19,6 +19,7 @@ from sqlalchemy import Select, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.magic_link import MagicLink
+from app.models.notification import Notification
 from app.models.seat_event import SeatEvent
 from app.models.showtime import Showtime
 from app.models.user import User
@@ -104,6 +105,36 @@ async def get_stats(db: AsyncSession) -> dict[str, Any]:
     )
     seat_events_total = await _count(db, select(func.count()).select_from(SeatEvent))
 
+    # --- Notifications (true message-send volume) ----------------------------
+    # One `notifications` row per message per channel attempt, written by the
+    # send_notifications Celery task since migration 004. Unlike
+    # seats.notified_total (which counts seats), delivered_total counts actual
+    # messages — the email slice should match the Resend dashboard. Rows only
+    # exist from the migration onward; history before it is not reconstructable.
+    messages_attempted = await _count(
+        db, select(func.count()).select_from(Notification)
+    )
+    messages_delivered = await _count(
+        db,
+        select(func.count())
+        .select_from(Notification)
+        .where(Notification.success.is_(True)),
+    )
+    delivered_7d = await _count(
+        db,
+        select(func.count())
+        .select_from(Notification)
+        .where(Notification.success.is_(True), Notification.created_at >= last_7d),
+    )
+    delivered_channel_rows = (
+        await db.execute(
+            select(Notification.channel, func.count())
+            .where(Notification.success.is_(True))
+            .group_by(Notification.channel)
+        )
+    ).all()
+    delivered_by_channel = {row[0]: row[1] for row in delivered_channel_rows}
+
     return {
         "generated_at": now,
         "users": {
@@ -135,5 +166,11 @@ async def get_stats(db: AsyncSession) -> dict[str, Any]:
         },
         "events": {
             "seat_open_total": seat_events_total,
+        },
+        "notifications": {
+            "attempted_total": messages_attempted,
+            "delivered_total": messages_delivered,
+            "delivered_last_7d": delivered_7d,
+            "delivered_by_channel": delivered_by_channel,
         },
     }
