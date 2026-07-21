@@ -147,13 +147,11 @@ export function SeatMap({
       startX: e.clientX,
       startY: e.clientY,
     };
-    // Capture so we keep getting moves even if the pointer leaves the map; the
-    // capture target doesn't affect elementFromPoint hit-testing below.
-    try {
-      scrollerRef.current?.setPointerCapture(e.pointerId);
-    } catch {
-      // capture can throw if the pointer is already gone — ignore
-    }
+    // NOTE: pointer capture is deliberately NOT taken here. Capturing on
+    // pointerdown makes the browser dispatch the trailing `click` on the
+    // capturing element (the scroller) instead of the seat <rect>, so a plain
+    // click would never reach the rect's onClick. We only capture once a real
+    // drag starts (in handlePointerMove), which leaves a pure click untouched.
   };
 
   const handlePointerMove = (e: ReactPointerEvent<HTMLDivElement>): void => {
@@ -163,6 +161,15 @@ export function SeatMap({
       const moved = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY);
       if (moved < DRAG_THRESHOLD_PX) return;
       drag.started = true;
+      // Now that this is a real drag, capture the pointer so we keep getting
+      // moves even if it leaves the map. Doing it here (not on pointerdown)
+      // keeps a pure click's `click` event on the seat rect. Capture does not
+      // affect elementFromPoint hit-testing below.
+      try {
+        scrollerRef.current?.setPointerCapture(drag.pointerId);
+      } catch {
+        // capture can throw if the pointer is already gone — ignore
+      }
       paint(drag.startId, true, drag); // origin seat is known-interactive
     }
     const hit = seatHit(document.elementFromPoint(e.clientX, e.clientY));
