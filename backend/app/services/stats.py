@@ -55,6 +55,14 @@ async def get_stats(db: AsyncSession) -> dict[str, Any]:
     new_users_30d = await _count(
         db, select(func.count()).select_from(User).where(User.created_at >= last_30d)
     )
+    # "Active users" == distinct people with at least one active watch. Each
+    # user has exactly one email (users.email UNIQUE), and Watch.user_id FKs to
+    # that row, so counting distinct user_ids over active watches is the same as
+    # counting distinct emails — and avoids a join back to users.
+    active_users = await _count(
+        db,
+        select(func.count(distinct(Watch.user_id))).where(Watch.status == "active"),
+    )
     # notify_via is a comma-separated string ('email', 'email,sms', ...). We
     # group by the raw column value for a rough breakdown — good enough without
     # splitting/normalising channels in SQL.
@@ -139,6 +147,7 @@ async def get_stats(db: AsyncSession) -> dict[str, Any]:
         "generated_at": now,
         "users": {
             "total": total_users,
+            "active": active_users,
             "new_last_7d": new_users_7d,
             "new_last_30d": new_users_30d,
             "by_channel": by_channel,

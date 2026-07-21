@@ -13,6 +13,8 @@ from pydantic import BaseModel
 
 class UserStats(BaseModel):
     total: int
+    # Distinct users (== distinct emails) with at least one 'active' watch.
+    active: int
     new_last_7d: int
     new_last_30d: int
     # Maps each raw notify_via value ('email', 'email,sms', …) to a user count.
