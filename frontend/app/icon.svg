@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+  <!-- Cinewatch favicon: a 3x3 reduction of the site's SeatGridMark, with the
+       single brass "seat" at centre. Square by design so it never squishes in
+       a browser tab. Colours are the brand palette (globals.css) hard-coded,
+       since a static icon file can't resolve CSS variables. -->
+  <rect x="0" y="0" width="48" height="48" rx="10" fill="#0b1322"/>
+  <g fill="#a7b0bd">
+    <rect x="9" y="12" width="8" height="6" rx="1.4"/>
+    <rect x="20" y="12" width="8" height="6" rx="1.4"/>
+    <rect x="31" y="12" width="8" height="6" rx="1.4"/>
+    <rect x="9" y="21" width="8" height="6" rx="1.4"/>
+    <rect x="31" y="21" width="8" height="6" rx="1.4"/>
+    <rect x="9" y="30" width="8" height="6" rx="1.4"/>
+    <rect x="20" y="30" width="8" height="6" rx="1.4"/>
+    <rect x="31" y="30" width="8" height="6" rx="1.4"/>
+  </g>
+  <rect x="20" y="21" width="8" height="6" rx="1.4" fill="#c8a86b"/>
+</svg>
