@@ -15,7 +15,20 @@ class Showtime(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     showtime_id: Mapped[int] = mapped_column(Integer, nullable=False)
     movie_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     theater_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Aware UTC instant (upstream showStartDateTimeUtc). Drives poll-interval math.
     showtime_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Naive theatre-local wall clock (upstream showStartDateTime). Drives all display —
+    # emails, watch header, dashboard. Kept separate from showtime_at so we never have
+    # to derive a theatre's timezone; Cineplex hands us both values.
+    showtime_local: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    # Stamped on every resolution *attempt*. NULL = never tried; non-NULL with a NULL
+    # movie_name = tried and failed. This is what keeps a transient failure from being
+    # cached as permanently unresolvable.
+    metadata_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Trimmed upstream response: poster URLs, runtime, rating, genres, auditorium,
+    # experience types, warnings. No UI consumes it yet — captured now so a later
+    # session can use it without another migration.
+    metadata_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     poll_interval_sec: Mapped[int] = mapped_column(Integer, default=90, nullable=False)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
