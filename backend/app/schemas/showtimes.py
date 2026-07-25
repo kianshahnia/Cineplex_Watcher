@@ -49,7 +49,14 @@ class ShowtimeDetail(BaseModel):
     showtime_id: int
     movie_name: str | None
     theater_name: str | None
+    #: Aware UTC instant. Serialized with an offset, so a browser would render
+    #: it in the *viewer's* timezone — correct for scheduling math, wrong for
+    #: display. Clients should prefer ``showtime_local``.
     showtime_at: datetime | None
+    #: Naive theatre-local wall clock — what the screening's own clock says.
+    #: Serialized without an offset so ``new Date(...)`` treats it as local and
+    #: an 11:00 AM Vancouver screening reads "11:00 AM" from anywhere.
+    showtime_local: datetime | None
     is_active: bool
 
     model_config = {"from_attributes": True}

@@ -26,7 +26,8 @@ single shared keep-alive ``httpx.Client``, so a ~140-showtime cycle finishes in
 requests at Cineplex at once.
 
 1. Load all active *watched* showtimes from the DB.
-2. Skip showtimes that were polled recently (within their interval).
+2. Retire showtimes whose start time has passed (no upstream request), and skip
+   showtimes that were polled recently (within their interval).
 3. Fetch the current seat availability from the Cineplex API on the shared
    ``httpx.Client`` (sync, run in a thread pool via ``asyncio.to_thread``).
 4. Diff against the previous availability snapshot stored in Redis.
@@ -129,12 +130,38 @@ _session_factory = async_sessionmaker(_engine, class_=AsyncSession, expire_on_co
 
 
 def get_poll_interval(showtime_at: datetime | None) -> int:
-    """Return the recommended poll interval in seconds.
+    """Return the recommended poll interval in seconds, or -1 to stop polling.
 
-    Falls back to 90 s when ``showtime_at`` is NULL (metadata not yet
-    populated).  Returns -1 only when ``showtime_at`` confirms the showtime
-    has passed — in practice the Cineplex API's ``isPostShowtime`` flag is
-    the authoritative signal to stop polling.
+    Takes the **aware UTC** ``showtimes.showtime_at``, which is now populated
+    automatically from Cineplex's ``showStartDateTimeUtc`` (see
+    ``services/showtime_metadata.py``).  It stays NULL only for showtimes whose
+    metadata could not be resolved, which fall back to a flat 90 s.
+
+    Tiers::
+
+        None     ->  90    metadata unresolved — the old flat default
+        <= 0h    ->  -1    started — caller retires the showtime, see below
+        <= 2h    ->  30    carts are abandoned most often close to showtime
+        <= 6h    ->  60
+        <= 24h   ->  90
+        else     -> 300    far future — nothing changes today
+
+    The 300 s far-future tier is what *pays* for the 30 s near-showtime tier.
+    Most watched showtimes are days out (people plan ahead), so moving that
+    majority from 90 s to 300 s more than offsets the showtimes inside two hours
+    now polling three times as often: net upstream volume drops by roughly a
+    third.  That matters because the Cineplex per-IP request budget, not CPU, is
+    this system's existential constraint (docs/scaling.md Finding 2).
+
+    **-1 is now actionable, not advisory.**  Before Cineplex's own start time was
+    available this function could only ever guess, so callers clamped -1 up to
+    the 30 s floor and waited for the API's ``isPostShowtime`` flag to confirm —
+    which made a screening that had *already started* poll three times more often
+    than one that hadn't.  With an authoritative start time, -1 means "this
+    screening has begun" and the caller retires the showtime outright.
+    ``isPostShowtime`` remains the backstop for showtimes whose metadata never
+    resolved (``showtime_at IS NULL``), where this function still returns 90 and
+    can never return -1.
     """
     if showtime_at is None:
         return 90
@@ -145,8 +172,10 @@ def get_poll_interval(showtime_at: datetime | None) -> int:
         return 30
     elif hours_until <= 6:
         return 60
-    else:
+    elif hours_until <= 24:
         return 90
+    else:
+        return 300
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +283,11 @@ class _NotifyJob:
     watch_name: str | None
     movie_name: str | None
     theater_name: str | None
+    # Display-only wall clock, fed to strftime by the renderers. Sourced from
+    # watches.showtime_at (naive by column definition) or showtimes.showtime_local
+    # (naive by design) — never from the aware-UTC showtimes.showtime_at. The
+    # field name is kept for wire compatibility: it is a key in the Celery task
+    # payload, so renaming it would break jobs already queued at deploy time.
     showtime_at: datetime | None
     theatre_id: int
     showtime_id: int
@@ -330,6 +364,56 @@ async def _poll_all_showtimes() -> None:
         await r.aclose()
 
 
+async def _stop_showtime(db: AsyncSession, db_showtime: Showtime, *, reason: str) -> None:
+    """Deactivate a showtime and expire every watch still active on it.
+
+    The terminal state for a screening, reached two ways: the Cineplex API's
+    ``isPostShowtime`` flag (``reason="post_showtime"``) or the screening's own
+    start time having passed (``reason="start_time_passed"``).  Both mean the
+    same thing to a user — the show is no longer watchable — so both land on the
+    same ``is_active = False`` + ``status = 'expired'`` result.
+
+    Does **not** commit or touch Redis; the caller owns the transaction boundary
+    and the snapshot cleanup, because the two call sites reach here from
+    different places in their own transactions.
+    """
+    await log.ainfo("showtime_ended", showtime_uuid=str(db_showtime.id), reason=reason)
+    db_showtime.is_active = False
+    watches_result = await db.execute(
+        select(Watch).where(
+            Watch.showtime_id == db_showtime.id,
+            Watch.status == "active",
+        )
+    )
+    for watch in watches_result.scalars():
+        watch.status = "expired"
+
+
+async def _retire_passed_showtimes(r, showtimes: list[Showtime]) -> None:
+    """Retire showtimes whose start time has passed, without polling them.
+
+    Deliberately runs *before* the fetch loop so a passed screening costs zero
+    upstream requests: the showtime is already over, so whatever Cineplex would
+    report about its seats is worthless.  Previously these kept polling — at the
+    30 s floor, the most aggressive interval in the system — until the API
+    happened to set ``isPostShowtime``.
+    """
+    async with _session_factory() as db:
+        for showtime in showtimes:
+            result = await db.execute(select(Showtime).where(Showtime.id == showtime.id))
+            db_showtime = result.scalar_one_or_none()
+            if db_showtime is None:
+                continue  # Deleted between the cycle's load and now.
+            await _stop_showtime(db, db_showtime, reason="start_time_passed")
+        await db.commit()
+
+    # Snapshots are only useful for diffing the next poll, and there won't be
+    # one. (They would expire on their own 6 h TTL regardless — this just
+    # reclaims the memory immediately, same as the isPostShowtime path.)
+    for showtime in showtimes:
+        await r.delete(make_snapshot_key(str(showtime.id)))
+
+
 async def _run_poll_cycle(r) -> None:
     """Run one full poll cycle across active, *watched* showtimes (lock held).
 
@@ -361,17 +445,32 @@ async def _run_poll_cycle(r) -> None:
     await log.ainfo("poll_cycle_start", watched_showtimes=len(showtimes))
     cycle_start = time.monotonic()
 
-    # Select the showtimes actually due for a refresh this cycle (their
-    # per-showtime poll_interval_sec has elapsed). The interval gate is unchanged
-    # from the old sequential loop — only the dispatch below is now concurrent.
+    # Partition the loaded showtimes into three groups:
+    #
+    #   passed — Cineplex's own start time says the screening has begun. Retired
+    #            below without ever being fetched.
+    #   due    — their per-showtime poll_interval_sec has elapsed.
+    #   (rest) — not due yet, skipped silently.
+    #
+    # The interval gate itself is unchanged; what's new is the passed check in
+    # front of it. get_poll_interval only returns -1 for a showtime with resolved
+    # metadata, so showtimes whose showtime_at is still NULL can never land here
+    # and keep relying on isPostShowtime as before.
     now = datetime.now(timezone.utc)
+    passed: list[Showtime] = []
     due: list[Showtime] = []
     for showtime in showtimes:
+        if get_poll_interval(showtime.showtime_at) < 0:
+            passed.append(showtime)
+            continue
         if showtime.last_polled_at is not None:
             elapsed = (now - showtime.last_polled_at).total_seconds()
             if elapsed < showtime.poll_interval_sec:
                 continue  # Not due yet — skip silently
         due.append(showtime)
+
+    if passed:
+        await _retire_passed_showtimes(r, passed)
 
     # Poll due showtimes with bounded concurrency instead of strictly one at a
     # time. asyncio.Semaphore caps how many _poll_showtime coroutines fetch
@@ -401,6 +500,7 @@ async def _run_poll_cycle(r) -> None:
         "poll_cycle_complete",
         watched_showtimes=len(showtimes),
         polled=len(due),
+        retired=len(passed),
         elapsed_sec=round(time.monotonic() - cycle_start, 1),
     )
 
@@ -490,18 +590,23 @@ async def _poll_showtime(r, client: httpx.Client, showtime: Showtime) -> None:
         st_result = await db.execute(select(Showtime).where(Showtime.id == showtime.id))
         db_showtime = st_result.scalar_one()
 
+        # Computed once and reused for both the stop decision and the interval
+        # assignment below, so the showtime can't cross its start boundary
+        # between two calls and slip past the stop check into a clamped interval.
+        new_interval = get_poll_interval(db_showtime.showtime_at)
+
+        stop_reason: str | None = None
         if is_post_showtime:
+            stop_reason = "post_showtime"
+        elif new_interval < 0:
+            # Start time crossed between this cycle's partition step and now — a
+            # sub-cycle race, handled here so it still retires immediately rather
+            # than waiting a full cycle.
+            stop_reason = "start_time_passed"
+
+        if stop_reason is not None:
             # Showtime is over — stop polling and expire all active watches.
-            await log.ainfo("showtime_ended", showtime_uuid=str(db_showtime.id))
-            db_showtime.is_active = False
-            watches_result = await db.execute(
-                select(Watch).where(
-                    Watch.showtime_id == db_showtime.id,
-                    Watch.status == "active",
-                )
-            )
-            for watch in watches_result.scalars():
-                watch.status = "expired"
+            await _stop_showtime(db, db_showtime, reason=stop_reason)
             await db.commit()
             await r.delete(snapshot_key)  # Clean up — no more polls needed
             return
@@ -622,21 +727,33 @@ async def _poll_showtime(r, client: httpx.Client, showtime: Showtime) -> None:
                             watch_name=watch.name,
                             movie_name=db_showtime.movie_name,
                             theater_name=db_showtime.theater_name,
-                            # The user's per-watch date wins over the (always
-                            # NULL) shared showtime metadata, mirroring how
-                            # watch_name overrides movie_name above.
-                            showtime_at=watch.showtime_at or db_showtime.showtime_at,
+                            # The user's per-watch date wins over the shared
+                            # showtime metadata, mirroring how watch_name
+                            # overrides movie_name above.
+                            #
+                            # NOTE the fallback is `showtime_local`, NOT
+                            # `showtime_at`. Both are the same screening, but
+                            # `showtime_at` is an aware UTC instant (it exists
+                            # to be compared against now() by
+                            # get_poll_interval) while this value is destined
+                            # for strftime in the alert copy. Rendering the UTC
+                            # column would email an 11:00 AM Vancouver
+                            # screening as "6:00 PM" — the naive theatre-local
+                            # column is the one users should read. Same reason
+                            # watches.showtime_at is itself naive.
+                            showtime_at=watch.showtime_at or db_showtime.showtime_local,
                             theatre_id=db_showtime.theatre_id,
                             showtime_id=db_showtime.showtime_id,
                             candidate_seats=candidates,
                         )
                     )
 
-        # Update adaptive poll interval and timestamp.
-        new_interval = get_poll_interval(db_showtime.showtime_at)
-        # If showtime_at says it's passed but isPostShowtime wasn't set yet,
-        # use the minimum interval (30 s) and let the API confirm.
-        db_showtime.poll_interval_sec = max(new_interval, 30)
+        # Update adaptive poll interval and timestamp. new_interval was computed
+        # at the top of this transaction and is guaranteed positive here — a
+        # passed showtime returned above instead of being clamped to the 30 s
+        # floor (which used to make passed showtimes the *most* aggressively
+        # polled rows in the table).
+        db_showtime.poll_interval_sec = new_interval
         db_showtime.last_polled_at = datetime.now(timezone.utc)
         await db.commit()
 

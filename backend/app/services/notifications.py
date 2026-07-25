@@ -61,10 +61,15 @@ class RenderedEmail:
 def _format_showtime(showtime_at: datetime | None) -> str:
     """Human-readable showtime string with a NULL-safe fallback.
 
-    ``showtimes.showtime_at`` is currently NULL for every row because the
-    Cineplex endpoints we use don't expose movie metadata (see
-    docs/context.md). Once we discover a metadata source this will start
-    rendering nicely without further changes here.
+    The value passed in must be a **naive theatre-local wall clock** — either
+    the user's own ``watches.showtime_at`` or the resolved
+    ``showtimes.showtime_local``. There is deliberately no timezone conversion
+    here: an 11:00 AM Vancouver screening should read "11:00 AM" for every
+    recipient, and the caller already holds the right column for that (see the
+    note at the ``_NotifyJob`` construction in ``tasks/poll_seats.py``).
+
+    Passing the aware-UTC ``showtimes.showtime_at`` would render UTC and is the
+    bug this contract exists to prevent.
     """
     if showtime_at is None:
         return "Showtime"

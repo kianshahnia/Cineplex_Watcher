@@ -136,6 +136,50 @@ _(Confirm exact URL — it's a sibling endpoint on the same base path.)_
 - `rows[].seats[].type` can be "Standard", "Wheelchair", "Companion", etc.
 - Empty `seats: []` rows represent physical gaps (aisles between sections).
 
+### Showtime metadata endpoint (movie title / theatre / start time)
+
+```
+GET https://apis.cineplex.com/prod/cpx/theatrical/api/v1/theatres/{theatre_id}/showtimes/{showtime_id}
+```
+
+A **different API product path** from the two seat endpoints above
+(`/prod/cpx/theatrical/` vs `/prod/ticketing/`) — same host, but with an Azure
+APIM subscription gate on top: it requires an `Ocp-Apim-Subscription-Key`
+header. No cookies, no auth, no `Origin`/`Referer`. Verified live 2026-07-24.
+
+The key is not a user credential — Cineplex ships it to every visitor in their
+public JS bundle — but it lives in `.env` as `CINEPLEX_API_KEY`, never in this
+file. Blank = the feature is disabled and titles stay NULL (the standard
+"blank value = dev-mode no-op" convention).
+
+**Response shape (abbreviated):**
+
+```jsonc
+{
+  "movie": "The Odyssey: The IMAX Experience® in 70MM Film",
+  "theatre": "SilverCity Riverport Cinemas",
+  "runtimeInMinutes": 172,
+  "localRating": "14A",
+  "genres": ["Action"],
+  "showDate": "2026-07-25T00:00:00",      // midnight of the screening DAY — useless, do not use
+  "showtime": {
+    "showStartDateTime":    "2026-07-25T11:00:00",   // naive THEATRE-LOCAL wall clock
+    "showStartDateTimeUtc": "2026-07-25T18:00:00Z",  // aware UTC instant
+    "auditorium": "IMAX 19"
+  }
+}
+```
+
+**The two timestamps are the whole design.** The UTC instant goes to
+`showtimes.showtime_at` (compared against `now()` by the adaptive poller); the
+theatre-local wall clock goes to `showtimes.showtime_local` (rendered in emails
+and the UI). Storing only one would mean deriving each theatre's timezone —
+Cineplex spans BC to Newfoundland, so a guess is wrong for most users.
+
+Status codes: **200** resolved · **401** missing/invalid/rotated key ·
+**404** unknown theatre+showtime pair (including a valid showtime queried under
+the wrong theatre).
+
 ### URL parsing
 
 Extract `theatre_id` and `showtime_id` from user-pasted URLs. Expected input formats:
@@ -167,9 +211,12 @@ The frontend needs to handle both: if the user pastes the public Cineplex URL, p
 - `id` UUID PK DEFAULT gen_random_uuid()
 - `theatre_id` INT NOT NULL — from Cineplex URL
 - `showtime_id` INT NOT NULL — from Cineplex URL
-- `movie_name` VARCHAR(255)
-- `theater_name` VARCHAR(255)
-- `showtime_at` TIMESTAMPTZ — when the movie starts
+- `movie_name` VARCHAR(255) — auto-resolved from the metadata endpoint on first view
+- `theater_name` VARCHAR(255) — likewise
+- `showtime_at` TIMESTAMPTZ — when the movie starts, as an **aware UTC instant**. Scheduling math only (feeds `get_poll_interval`); never display it directly
+- `showtime_local` TIMESTAMP (naive) — the same screening as the **theatre-local wall clock**. This is the display value: emails, watch header, dashboard
+- `metadata_fetched_at` TIMESTAMPTZ NULLABLE — last resolution *attempt*. NULL = never tried; set alongside a NULL `movie_name` = tried and failed. Distinguishing those is what stops a transient failure from caching as permanently unresolvable
+- `metadata_json` JSONB NULLABLE — trimmed extras (posters, runtime, rating, genres, auditorium). Nothing renders them yet; stored so a later feature needs no migration
 - `is_active` BOOLEAN DEFAULT true — set false when `isPostShowtime` or manually stopped
 - `poll_interval_sec` INT DEFAULT 90 — adaptive: 90 → 60 → 30
 - `last_polled_at` TIMESTAMPTZ NULLABLE
@@ -233,19 +280,25 @@ Multiple users can watch the same showtime. The `showtimes` table has a UNIQUE c
 ## Adaptive polling strategy
 
 ```python
-def get_poll_interval(showtime_at: datetime) -> int:
+def get_poll_interval(showtime_at: datetime | None) -> int:
+    if showtime_at is None:
+        return 90  # metadata never resolved — flat fallback
     hours_until = (showtime_at - datetime.now(timezone.utc)).total_seconds() / 3600
     if hours_until <= 0:
-        return -1  # stop polling
+        return -1  # started — stop polling
     elif hours_until <= 2:
         return 30  # high frequency — carts abandoned most often near showtime
     elif hours_until <= 6:
         return 60
-    else:
+    elif hours_until <= 24:
         return 90
+    else:
+        return 300  # far future — nothing changes today
 ```
 
-Update `showtimes.poll_interval_sec` after each poll. If `isPostShowtime` is true in the API response, set `is_active = false` and mark all watches as 'expired'.
+`showtime_at` is the **aware UTC** column, auto-resolved from the metadata endpoint above. The far-future 300s tier is what pays for the 30s near-showtime tier: most watched showtimes are days out, so the majority polling 3× slower more than offsets the minority polling 3× faster. Total upstream volume is the binding constraint.
+
+Update `showtimes.poll_interval_sec` after each poll. **Never clamp `-1` up to a positive interval** — a started showtime would then poll more often than an upcoming one. Both `-1` and an `isPostShowtime: true` response are terminal: set `is_active = false` and mark all watches as 'expired'. Showtimes retired by start time are dropped from the cycle *before* they are fetched, so they cost no upstream request; `isPostShowtime` remains the only stop signal for showtimes whose `showtime_at` is still NULL.
 
 ---
 

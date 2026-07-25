@@ -25,6 +25,7 @@ const STATUS_COPY: Record<Watch["status"], { label: string; tone: string }> = {
   expired: { label: "Expired", tone: "muted" },
 };
 
+/** Pass an offset-less wall clock — see the note in WatchHeader.tsx. */
 function formatShowtime(iso: string | null): string | null {
   if (!iso) return null;
   const d = new Date(iso);
@@ -69,14 +70,18 @@ export function WatchCard({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
 
-  // The watch's own name wins; otherwise fall back to the (currently always
-  // NULL) movie name, then a generic placeholder.
+  // The watch's own name wins (it's the user's personal label); otherwise the
+  // movie title auto-resolved from Cineplex, then a generic placeholder for
+  // showtimes whose metadata couldn't be resolved.
   const displayName =
     name?.trim() || showtime.movie_name?.trim() || "Your watched showtime";
   const theaterName = showtime.theater_name?.trim();
-  // The user's per-watch date wins over the (always-NULL) shared showtime
-  // metadata — same precedence as the name.
-  const showtimeAt = formatShowtime(showtime_at ?? showtime.showtime_at);
+  // The user's per-watch date wins over the auto-resolved Cineplex metadata —
+  // same precedence as the name. Both preferred values are naive wall clocks;
+  // the aware-UTC `showtime_at` is only a last resort (see lib/api.ts).
+  const showtimeAt = formatShowtime(
+    showtime_at ?? showtime.showtime_local ?? showtime.showtime_at,
+  );
   const statusInfo = STATUS_COPY[status];
 
   const seatLabels = sortLabels(seats.map((s) => s.seat_label));

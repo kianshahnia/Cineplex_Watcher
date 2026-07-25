@@ -52,7 +52,11 @@ class ShowtimeSummary(BaseModel):
     showtime_id: int
     movie_name: str | None
     theater_name: str | None
+    # Aware UTC instant (scheduling math). ``showtime_local`` is the naive
+    # theatre-local wall clock and is what clients should display — see the
+    # field docs on ``schemas/showtimes.ShowtimeDetail``.
     showtime_at: datetime | None
+    showtime_local: datetime | None
     is_active: bool
 
     model_config = {"from_attributes": True}

@@ -16,6 +16,7 @@ from app.schemas.showtimes import (
     ShowtimeWithSeats,
 )
 from app.services import cineplex as cineplex_service
+from app.services import showtime_metadata as metadata_service
 from app.services import watches as watch_service
 from app.services.rate_limit import ip_key, limiter
 
@@ -56,23 +57,33 @@ async def get_showtime_seats(
     #    that watch creation uses).
     showtime = await watch_service.get_or_create_showtime(theatre_id, showtime_id, db)
 
-    # 2. Fetch and cache the seat layout if we don't already have it.
+    # 2. Resolve the movie title / theatre / start time on first view.
+    #    A sibling of the seat-layout cache below and the same shape: fetch once
+    #    from upstream, store it on the shared row, never fetch it again.  This
+    #    is the *only* trigger point the feature needs — the watch page SSRs
+    #    through this endpoint, so metadata resolves the first time anyone looks
+    #    at a showtime, before a watch even exists.  Self-guarding (already
+    #    resolved / in cooldown are both no-ops) and never raises; a failure
+    #    leaves the columns NULL and the UI on its existing placeholders.
+    await metadata_service.ensure_showtime_metadata(showtime, request.app.state.redis, db)
+
+    # 3. Fetch and cache the seat layout if we don't already have it.
     if showtime.seat_layout_json is None:
         layout_data = await cineplex_service.fetch_seat_layout(theatre_id, showtime_id)
         showtime.seat_layout_json = layout_data
         await db.commit()
         await db.refresh(showtime)
 
-    # 3. Always fetch fresh availability.
+    # 4. Always fetch fresh availability.
     availability_data = await cineplex_service.fetch_seat_availability(theatre_id, showtime_id)
 
-    # 4. If the showtime has passed, mark it inactive.
+    # 5. If the showtime has passed, mark it inactive.
     if availability_data.get("isPostShowtime", False) and showtime.is_active:
         showtime.is_active = False
         await db.commit()
         await db.refresh(showtime)
 
-    # 5. Merge layout + availability into the frontend-ready structure.
+    # 6. Merge layout + availability into the frontend-ready structure.
     merged = cineplex_service.merge_layout_and_availability(
         showtime.seat_layout_json,
         availability_data,

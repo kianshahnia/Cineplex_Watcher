@@ -150,7 +150,18 @@ export interface ShowtimeDetail {
   showtime_id: number;
   movie_name: string | null;
   theater_name: string | null;
+  /**
+   * Aware UTC instant, offset included. `new Date()` renders it in the
+   * *viewer's* timezone — right for scheduling math, wrong for display.
+   * Prefer `showtime_local` in the UI.
+   */
   showtime_at: string | null;
+  /**
+   * Theatre-local wall clock as a naive ISO string (`YYYY-MM-DDTHH:MM:SS`).
+   * Offset-less, so `new Date()` reads it as local time and an 11:00 AM
+   * Vancouver screening displays as "11:00 AM" from anywhere. Display this.
+   */
+  showtime_local: string | null;
   is_active: boolean;
 }
 
@@ -212,7 +223,10 @@ export interface WatchShowtime {
   showtime_id: number;
   movie_name: string | null;
   theater_name: string | null;
+  /** Aware UTC instant — see `ShowtimeDetail.showtime_at`. Not for display. */
   showtime_at: string | null;
+  /** Naive theatre-local wall clock — display this one. */
+  showtime_local: string | null;
   is_active: boolean;
 }
 
