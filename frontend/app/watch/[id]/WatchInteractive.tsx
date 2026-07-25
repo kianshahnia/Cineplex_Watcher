@@ -20,12 +20,13 @@ import type {
   Watch,
 } from "@/lib/api";
 import { SeatMap } from "../../components/SeatMap";
-import { DateTimePicker } from "../../components/DateTimePicker";
 import {
   useShowtimeEvents,
   type ShowtimeEvent,
 } from "@/hooks/useShowtimeEvents";
+import { WatchHeader } from "./WatchHeader";
 import styles from "./WatchInteractive.module.css";
+import pageStyles from "./WatchPage.module.css";
 
 const STORAGE_PREFIX = "cinewatch.selection.";
 
@@ -118,15 +119,11 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
   // --- selection ---------------------------------------------------------
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [notifyAnySeat, setNotifyAnySeat] = useState<boolean>(false);
-  // User-provided name for this watch (sent on create, editable after).
+  // The user's personal label for this watch, edited by clicking the page
+  // title. Sent along with the create call; PATCHed in place afterwards.
+  // Empty string = no override, so the Cineplex-resolved movie name shows.
   const [name, setName] = useState<string>("");
   const [nameSaving, setNameSaving] = useState<boolean>(false);
-  // User-picked screening date/time. `dateEnabled` gates whether a date is
-  // attached at all (off → null); `showtimeAt` is the naive ISO the wheel
-  // picker emits while enabled.
-  const [dateEnabled, setDateEnabled] = useState<boolean>(false);
-  const [showtimeAt, setShowtimeAt] = useState<string | null>(null);
-  const [dateSaving, setDateSaving] = useState<boolean>(false);
 
   // hydrate from localStorage on mount
   useEffect(() => {
@@ -165,14 +162,9 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
       }
       setAuth({ kind: "signed-in", user, existingWatch });
       if (existingWatch) {
-        // reflect the existing notify_any_seat + name + date in the UI
+        // reflect the existing notify_any_seat + name in the UI
         setNotifyAnySeat(existingWatch.notify_any_seat);
         setName(existingWatch.name ?? "");
-        setShowtimeAt(existingWatch.showtime_at);
-        setDateEnabled(existingWatch.showtime_at !== null);
-      } else {
-        setShowtimeAt(null);
-        setDateEnabled(false);
       }
     } catch {
       setAuth({ kind: "signed-out" });
@@ -355,7 +347,6 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
           showtime_id,
           notify_any_seat: notifyAnySeat,
           name: name.trim() || null,
-          showtime_at: dateEnabled ? showtimeAt : null,
         });
       }
 
@@ -392,69 +383,49 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     auth,
     notifyAnySeat,
     name,
-    dateEnabled,
-    showtimeAt,
     newSelectionIds,
     seatLookup,
     theatre_id,
     showtime_id,
   ]);
 
-  const onSaveName = useCallback(async (): Promise<void> => {
-    if (auth.kind !== "signed-in" || !auth.existingWatch) return;
-    setNameSaving(true);
-    try {
-      const updated = await updateWatch(auth.existingWatch.id, {
-        name: name.trim() || null,
-      });
-      setAuth({ kind: "signed-in", user: auth.user, existingWatch: updated });
-      setName(updated.name ?? "");
-    } catch (err) {
-      const message =
-        err instanceof ApiError
-          ? err.message
-          : err instanceof Error
+  /**
+   * Commit a new label from the click-to-edit page title.
+   *
+   * Before the watch exists there is nothing to PATCH — the name is held
+   * locally and rides along with `createWatch` on submit. Afterwards it's a
+   * PATCH in place. **Rethrows on failure** so `WatchHeader` keeps its editor
+   * open for a retry (same contract as `WatchCard.onRename`).
+   */
+  const onRenameTitle = useCallback(
+    async (next: string | null): Promise<void> => {
+      if (auth.kind !== "signed-in") return;
+      if (!auth.existingWatch) {
+        setName(next ?? "");
+        return;
+      }
+      setNameSaving(true);
+      try {
+        const updated = await updateWatch(auth.existingWatch.id, {
+          name: next,
+        });
+        setAuth({ kind: "signed-in", user: auth.user, existingWatch: updated });
+        setName(updated.name ?? "");
+      } catch (err) {
+        const message =
+          err instanceof ApiError
             ? err.message
-            : "Couldn't save that name.";
-      setSubmit({ kind: "error", message });
-    } finally {
-      setNameSaving(false);
-    }
-  }, [auth, name]);
-
-  const onToggleDate = useCallback((): void => {
-    setDateEnabled((prev) => {
-      const next = !prev;
-      // Turning it off clears the value; turning it on lets the picker seed
-      // `showtimeAt` via its mount emit.
-      if (!next) setShowtimeAt(null);
-      return next;
-    });
-    clearSubmitNotice();
-  }, [clearSubmitNotice]);
-
-  const onSaveDate = useCallback(async (): Promise<void> => {
-    if (auth.kind !== "signed-in" || !auth.existingWatch) return;
-    setDateSaving(true);
-    try {
-      const updated = await updateWatch(auth.existingWatch.id, {
-        showtime_at: dateEnabled ? showtimeAt : null,
-      });
-      setAuth({ kind: "signed-in", user: auth.user, existingWatch: updated });
-      setShowtimeAt(updated.showtime_at);
-      setDateEnabled(updated.showtime_at !== null);
-    } catch (err) {
-      const message =
-        err instanceof ApiError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : "Couldn't save that date.";
-      setSubmit({ kind: "error", message });
-    } finally {
-      setDateSaving(false);
-    }
-  }, [auth, dateEnabled, showtimeAt]);
+            : err instanceof Error
+              ? err.message
+              : "Couldn't save that name.";
+        setSubmit({ kind: "error", message });
+        throw err;
+      } finally {
+        setNameSaving(false);
+      }
+    },
+    [auth],
+  );
 
   const onCancelWatch = useCallback(async (): Promise<void> => {
     if (auth.kind !== "signed-in" || !auth.existingWatch) return;
@@ -464,8 +435,6 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
       setAuth({ kind: "signed-in", user: auth.user, existingWatch: null });
       setSubmit({ kind: "idle" });
       setNotifyAnySeat(false);
-      setShowtimeAt(null);
-      setDateEnabled(false);
     } catch (err) {
       const message =
         err instanceof ApiError
@@ -477,58 +446,45 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     }
   }, [auth]);
 
-  // --- date field (built here so prop-threading through ActionPanel stays
-  // shallow — it's rendered as an opaque node in the controls column).
-  const committedDate = existingWatch?.showtime_at ?? null;
-  const effectiveDate = dateEnabled ? showtimeAt : null;
-  const normDate = (s: string | null): string | null => (s ? s.slice(0, 16) : null);
-  const dateDirty =
-    existingWatch !== null && normDate(effectiveDate) !== normDate(committedDate);
-
-  const dateField =
-    auth.kind === "signed-in" ? (
-      <DateField
-        enabled={dateEnabled}
-        onToggle={onToggleDate}
-        initialValue={existingWatch?.showtime_at ?? null}
-        pickerKey={existingWatch?.id ?? "new"}
-        onChange={setShowtimeAt}
-        hasExisting={existingWatch !== null}
-        dirty={dateDirty}
-        saving={dateSaving}
-        onSave={onSaveDate}
-      />
-    ) : null;
+  const isSignedIn = auth.kind === "signed-in";
 
   return (
     <>
-      <SeatMap
-        layout={layout}
-        selectedIds={selectedIds}
-        watchedIds={watchedIds}
-        flashIds={flashIds}
-        onSeatPaint={onPaintSeat}
+      {/* The header lives inside this client root (rather than in the server
+          page) because the editable title is fed by `auth.existingWatch`,
+          which only exists here. Keeps it to one getMe/listWatches round-trip. */}
+      <WatchHeader
+        data={initial}
+        name={isSignedIn ? name || null : null}
+        watchShowtimeAt={existingWatch?.showtime_at ?? null}
+        onRename={isSignedIn ? onRenameTitle : null}
+        renaming={nameSaving}
       />
 
-      <ActionPanel
-        auth={auth}
-        name={name}
-        onNameChange={setName}
-        onSaveName={onSaveName}
-        nameSaving={nameSaving}
-        dateField={dateField}
-        watchAll={notifyAnySeat}
-        watchAllLocked={watchAllLocked}
-        onToggleWatchAll={onToggleWatchAll}
-        watchedLabels={watchedLabels}
-        newSelectionLabels={newSelectionLabels}
-        newSelectionCount={newSelectionIds.length}
-        onClearSelection={onClearSelection}
-        canSubmit={canSubmit}
-        submit={submit}
-        onSubmit={onSubmit}
-        onCancelWatch={onCancelWatch}
-      />
+      <section className={pageStyles.mapCard} aria-label="Seat map">
+        <SeatMap
+          layout={layout}
+          selectedIds={selectedIds}
+          watchedIds={watchedIds}
+          flashIds={flashIds}
+          onSeatPaint={onPaintSeat}
+        />
+
+        <ActionPanel
+          auth={auth}
+          watchAll={notifyAnySeat}
+          watchAllLocked={watchAllLocked}
+          onToggleWatchAll={onToggleWatchAll}
+          watchedLabels={watchedLabels}
+          newSelectionLabels={newSelectionLabels}
+          newSelectionCount={newSelectionIds.length}
+          onClearSelection={onClearSelection}
+          canSubmit={canSubmit}
+          submit={submit}
+          onSubmit={onSubmit}
+          onCancelWatch={onCancelWatch}
+        />
+      </section>
     </>
   );
 }
@@ -537,11 +493,6 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
 
 function ActionPanel({
   auth,
-  name,
-  onNameChange,
-  onSaveName,
-  nameSaving,
-  dateField,
   watchAll,
   watchAllLocked,
   onToggleWatchAll,
@@ -555,11 +506,6 @@ function ActionPanel({
   onCancelWatch,
 }: {
   auth: AuthState;
-  name: string;
-  onNameChange: (v: string) => void;
-  onSaveName: () => void;
-  nameSaving: boolean;
-  dateField: JSX.Element | null;
   watchAll: boolean;
   watchAllLocked: boolean;
   onToggleWatchAll: () => void;
@@ -579,9 +525,6 @@ function ActionPanel({
   const creating = auth.kind === "signed-in" && !hasExisting;
   const isSignedIn = auth.kind === "signed-in";
   const isSubmitting = submit.kind === "submitting";
-
-  const committedName = existing?.name ?? "";
-  const nameDirty = hasExisting && name.trim() !== committedName.trim();
 
   let ctaLabel: string;
   if (existingIsAll) {
@@ -689,35 +632,6 @@ function ActionPanel({
         <div className={styles.controlsCol}>
           {isSignedIn ? (
             <>
-              <div className={styles.nameField}>
-                <label className={styles.nameLabel} htmlFor="watch-name">
-                  Name this showtime
-                </label>
-                <div className={styles.nameInputRow}>
-                  <input
-                    id="watch-name"
-                    type="text"
-                    className={styles.nameInput}
-                    value={name}
-                    maxLength={120}
-                    placeholder="e.g. Dune: Part Two — Fri 7pm"
-                    onChange={(e) => onNameChange(e.target.value)}
-                  />
-                  {hasExisting ? (
-                    <button
-                      type="button"
-                      className={styles.nameSaveBtn}
-                      onClick={onSaveName}
-                      disabled={!nameDirty || nameSaving}
-                    >
-                      {nameSaving ? "Saving…" : "Save"}
-                    </button>
-                  ) : null}
-                </div>
-              </div>
-
-              {dateField}
-
               <button
                 type="button"
                 className={styles.primary}
@@ -834,79 +748,6 @@ function SelectionSummary({
         <p className={styles.hint}>
           Click a seat to pick it — or click and drag across several at once.
           Occupied seats too; we ping you when a watched seat opens up.
-        </p>
-      )}
-    </div>
-  );
-}
-
-// The optional "showtime date & time" control: a toggle that reveals the
-// iOS-style wheel picker. For a new watch the chosen date rides along with the
-// main "Start watching" submit; for an existing watch a "Save date" button
-// commits a change in place (the date is editable any time, like the name).
-function DateField({
-  enabled,
-  onToggle,
-  initialValue,
-  pickerKey,
-  onChange,
-  hasExisting,
-  dirty,
-  saving,
-  onSave,
-}: {
-  enabled: boolean;
-  onToggle: () => void;
-  initialValue: string | null;
-  pickerKey: string;
-  onChange: (iso: string) => void;
-  hasExisting: boolean;
-  dirty: boolean;
-  saving: boolean;
-  onSave: () => void;
-}): JSX.Element {
-  return (
-    <div className={styles.dateField}>
-      <div className={styles.dateHead}>
-        <span className={styles.nameLabel}>Showtime date &amp; time</span>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enabled}
-          className={`${styles.dateToggle} ${enabled ? styles.dateToggleOn : ""}`}
-          onClick={onToggle}
-        >
-          <span className={styles.dateToggleTrack} aria-hidden="true">
-            <span className={styles.dateToggleKnob} />
-          </span>
-          <span className={styles.dateToggleText}>{enabled ? "On" : "Off"}</span>
-        </button>
-      </div>
-
-      {enabled ? (
-        <>
-          <DateTimePicker
-            key={pickerKey}
-            initialValue={initialValue}
-            onChange={onChange}
-          />
-          {hasExisting ? (
-            <div className={styles.dateFoot}>
-              <button
-                type="button"
-                className={styles.nameSaveBtn}
-                onClick={onSave}
-                disabled={!dirty || saving}
-              >
-                {saving ? "Saving…" : "Save date"}
-              </button>
-            </div>
-          ) : null}
-        </>
-      ) : (
-        <p className={styles.nameHint}>
-          Optional — roll in the screening’s date and time so your alerts and
-          watchlist read clearly.
         </p>
       )}
     </div>

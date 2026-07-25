@@ -4,7 +4,6 @@ import { Footer } from "../../components/Footer";
 import { TopBar } from "../../components/TopBar";
 import { ApiError, getShowtimeSeats } from "@/lib/api";
 import { WatchError } from "./WatchError";
-import { WatchHeader } from "./WatchHeader";
 import { WatchInteractive } from "./WatchInteractive";
 import styles from "./WatchPage.module.css";
 
@@ -56,12 +55,10 @@ export default async function WatchPage({
       <TopBar />
       <main className={`${styles.main} container`}>
         {data ? (
-          <>
-            <WatchHeader data={data} />
-            <section className={styles.mapCard} aria-label="Seat map">
-              <WatchInteractive initial={data} />
-            </section>
-          </>
+          // WatchInteractive is the client root: it renders the header (whose
+          // editable title needs the client-loaded watch) and the seat-map
+          // card itself. See the comment in WatchInteractive's return.
+          <WatchInteractive initial={data} />
         ) : (
           <WatchError
             message={fetchError ?? "Unknown error."}

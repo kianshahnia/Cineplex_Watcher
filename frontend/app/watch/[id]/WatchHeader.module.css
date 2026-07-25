@@ -82,6 +82,119 @@
   font-variation-settings: "opsz" 144;
 }
 
+/* --- click-to-edit title -----------------------------------------------
+   Reads as a headline at rest; the affordance (a brass hairline under the
+   text + a small "Edit" tag) only appears on hover/focus, so the page never
+   looks like a form. */
+
+.titleBtn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4em;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: text;
+  /* inherit every type property from .title so the button is invisible */
+  font: inherit;
+  font-variation-settings: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+
+.titleText {
+  border-bottom: 1px solid transparent;
+  transition: border-color 220ms ease;
+}
+
+.titleBtn:hover .titleText,
+.titleBtn:focus-visible .titleText {
+  border-bottom-color: var(--hair-brass);
+}
+
+.titleBtn:focus-visible {
+  outline: none;
+}
+
+.titleEditTag {
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  font-variation-settings: normal;
+  color: var(--brass);
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+
+.titleBtn:hover .titleEditTag,
+.titleBtn:focus-visible .titleEditTag {
+  opacity: 1;
+  transform: none;
+}
+
+/* Touch devices never hover, so the affordance would be invisible there —
+   show it permanently, dimmed. */
+@media (hover: none) {
+  .titleEditTag {
+    opacity: 0.75;
+    transform: none;
+  }
+
+  .titleText {
+    border-bottom-color: var(--hair-brass);
+  }
+}
+
+.titleEdit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Matches .title exactly, so committing an edit causes no visual jump. */
+.titleInput {
+  width: 100%;
+  margin: 0;
+  padding: 0 0 4px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--brass);
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(32px, 5.2vw, 60px);
+  line-height: 1.04;
+  letter-spacing: -0.012em;
+  font-variation-settings: "opsz" 144;
+  color: var(--mist);
+}
+
+.titleInput:focus {
+  outline: none;
+}
+
+.titleInput::placeholder {
+  color: var(--silver-deep);
+}
+
+.titleInput:disabled {
+  opacity: 0.6;
+}
+
+.editHint {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--silver-dim);
+}
+
 .metaRow {
   display: flex;
   flex-wrap: wrap;
