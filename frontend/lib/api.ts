@@ -162,6 +162,12 @@ export interface ShowtimeDetail {
    * Vancouver screening displays as "11:00 AM" from anywhere. Display this.
    */
   showtime_local: string | null;
+  /**
+   * Presentation formats for this screening — e.g. `["IMAX", "70mm"]`,
+   * `["UltraAVX", "Dolby Atmos"]`. Tokens are Cineplex's own branding and are
+   * rendered verbatim. Empty when the showtime's metadata never resolved.
+   */
+  experience_types: string[];
   is_active: boolean;
 }
 
@@ -178,6 +184,51 @@ export function getShowtimeSeats(
 ): Promise<ShowtimeWithSeats> {
   return api<ShowtimeWithSeats>(
     `/showtimes/${theatre_id}/${showtime_id}`,
+    { method: "GET", cache: "no-store" },
+  );
+}
+
+// --- Sibling showtimes ----------------------------------------------------
+
+export interface AlternativeShowtime {
+  showtime_id: number;
+  /** Aware UTC instant — see `ShowtimeDetail.showtime_at`. Not for display. */
+  showtime_at: string | null;
+  /** Naive theatre-local wall clock — display this one. */
+  showtime_local: string | null;
+  auditorium: string | null;
+  /**
+   * Soft hint only. It rides a short-lived server cache and changes minute to
+   * minute; the seat map is the authoritative source. Never gate anything on it.
+   */
+  seats_remaining: number | null;
+  is_sold_out: boolean;
+}
+
+export interface SiblingShowtimes {
+  theatre_id: number;
+  /** The showtime whose link the user pasted — excluded from `alternatives`. */
+  showtime_id: number;
+  /** Shared by the whole set: Cineplex groups siblings by screen and format. */
+  auditorium: string | null;
+  showtime_local: string | null;
+  alternatives: AlternativeShowtime[];
+}
+
+/**
+ * The same film's other showings, on the same screen, on the same day.
+ *
+ * The backend never fails this on upstream trouble — a missing key, a 404, or a
+ * network error all come back as an empty `alternatives` list, the same thing a
+ * film with a single showing returns. So callers have no error branch: an empty
+ * list simply means "no switcher".
+ */
+export function getShowtimeAlternatives(
+  theatre_id: number,
+  showtime_id: number,
+): Promise<SiblingShowtimes> {
+  return api<SiblingShowtimes>(
+    `/showtimes/${theatre_id}/${showtime_id}/alternatives`,
     { method: "GET", cache: "no-store" },
   );
 }
@@ -227,6 +278,8 @@ export interface WatchShowtime {
   showtime_at: string | null;
   /** Naive theatre-local wall clock — display this one. */
   showtime_local: string | null;
+  /** Presentation formats — see `ShowtimeDetail.experience_types`. */
+  experience_types: string[];
   is_active: boolean;
 }
 
@@ -306,6 +359,65 @@ export function addSeatsToWatch(
 
 export function cancelWatch(watch_id: string): Promise<Watch> {
   return api<Watch>(`/watches/${watch_id}`, { method: "DELETE" });
+}
+
+// --- Fan-out (apply a selection across a film's other showings) -----------
+
+/**
+ * Hard cap on targets per call, mirroring `MAX_FANOUT_TARGETS` in
+ * `backend/app/schemas/watches.py`. Exceeding it is a 422, so the UI trims
+ * rather than letting the whole batch bounce.
+ */
+export const MAX_FANOUT_TARGETS = 8;
+
+/**
+ * `created` / `updated` / `reactivated` all mean "you are now watching this
+ * showtime"; they differ only in what happened to a prior watch. `skipped` is a
+ * safety guard refusing the target, `failed` is worth retrying.
+ */
+export type FanoutStatus =
+  | "created"
+  | "updated"
+  | "reactivated"
+  | "skipped"
+  | "failed";
+
+export interface FanoutResult {
+  showtime_id: number;
+  status: FanoutStatus;
+  watch_id: string | null;
+  /** Total seats now tracked on that watch — not just the ones this call added. */
+  seats_applied: number;
+  /** Requested seats already free at that showtime right now. Screen-only. */
+  already_available: string[];
+  message: string | null;
+}
+
+export interface FanoutTarget {
+  showtime_id: number;
+  seats: SeatToWatch[];
+}
+
+/**
+ * Apply seat selections to several showings of the same film in one call.
+ *
+ * Seats are carried **per target**, so the same call serves both "the same seats
+ * everywhere" and "a different pick per showtime". Partial success is the
+ * contract: this resolves with one result per target even when some were
+ * refused, and only throws when the request itself was rejected (auth, rate
+ * limit, the target cap).
+ */
+export function fanoutWatches(args: {
+  theatre_id: number;
+  source_showtime_id: number;
+  targets: FanoutTarget[];
+  notify_any_seat?: boolean;
+  name?: string | null;
+}): Promise<FanoutResult[]> {
+  return api<{ results: FanoutResult[] }>("/watches/fanout", {
+    method: "POST",
+    body: args,
+  }).then((d) => d.results);
 }
 
 /** Permanently delete a watch (hard delete, any status). */

@@ -57,6 +57,8 @@ class ShowtimeSummary(BaseModel):
     # field docs on ``schemas/showtimes.ShowtimeDetail``.
     showtime_at: datetime | None
     showtime_local: datetime | None
+    # Presentation formats off metadata_json — see schemas/showtimes.ShowtimeDetail.
+    experience_types: list[str] = []
     is_active: bool
 
     model_config = {"from_attributes": True}
@@ -126,6 +128,86 @@ class AddSeatsRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Fan-out — apply a selection across a film's other showings
+# ---------------------------------------------------------------------------
+
+#: Hard cap on how many showtimes one call may touch. Real sibling sets run 2-6.
+#: This is the most upstream-expensive endpoint in the app (one live Cineplex
+#: request per target), and Cineplex request volume from our single Canadian
+#: egress IP is the project's binding constraint — so the cap is what bounds a
+#: single call's blast radius.
+MAX_FANOUT_TARGETS = 8
+
+
+class FanoutTargetInput(BaseModel):
+    """One showtime to apply seats to.
+
+    Seats are carried **per target** rather than shared across the request. That
+    is what lets one endpoint serve both selection modes: "same seats for all"
+    simply repeats the same list on every target, while "per showtime" sends a
+    different one each time.
+    """
+
+    showtime_id: int
+    seats: list[SeatInput] = []
+
+
+class FanoutRequest(BaseModel):
+    theatre_id: int
+    #: The showtime whose page the user is on. Its siblings are re-derived
+    #: server-side from this, and every target must be one of them.
+    source_showtime_id: int
+    notify_any_seat: bool = False
+    name: str | None = Field(default=None, max_length=_NAME_MAX_LEN)
+    targets: list[FanoutTargetInput] = Field(min_length=1, max_length=MAX_FANOUT_TARGETS)
+
+    _clean_name = field_validator("name")(_clean_name)
+
+    @field_validator("targets")
+    @classmethod
+    def _reject_duplicate_targets(
+        cls, value: list[FanoutTargetInput]
+    ) -> list[FanoutTargetInput]:
+        """One entry per showtime.
+
+        A repeated showtime would be applied twice, and since the second pass
+        sees an active watch it would silently report ``updated`` for what the
+        caller thinks is a fresh target. Rejecting outright is clearer than
+        merging seat lists we were not asked to merge.
+        """
+        seen = {t.showtime_id for t in value}
+        if len(seen) != len(value):
+            raise ValueError("Each showtime may appear only once in targets.")
+        return value
+
+
+class FanoutResult(BaseModel):
+    """The outcome for one target. Rendered as one line in the results list."""
+
+    showtime_id: int
+    #: ``created`` | ``updated`` | ``reactivated`` | ``skipped`` | ``failed``.
+    #: The first three all mean "you are now watching this showtime"; they are
+    #: reported separately because a reactivated watch had its previous seats
+    #: cleared, which is worth being able to say.
+    status: str
+    watch_id: uuid.UUID | None = None
+    #: Total seats now tracked on that watch, not just the ones this call added.
+    seats_applied: int = 0
+    #: Requested seats that are already free at this showtime right now — worth
+    #: telling the user immediately rather than watching for them. Screen-only;
+    #: no notification is sent, since they are looking straight at it.
+    already_available: list[str] = []
+    #: Human-readable reason, set on ``skipped`` / ``failed``.
+    message: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class FanoutResults(BaseModel):
+    results: list[FanoutResult]
+
+
+# ---------------------------------------------------------------------------
 # Response envelopes
 # ---------------------------------------------------------------------------
 
@@ -137,4 +219,16 @@ class WatchDetailResponse(BaseModel):
 
 class WatchListResponse(BaseModel):
     data: list[WatchResponse]
+    error: None = None
+
+
+class FanoutResponse(BaseModel):
+    """Standard envelope for the fan-out endpoint.
+
+    Always 200 when the request itself was well-formed: partial success is the
+    contract, so per-target failures live in ``data.results`` rather than in a
+    status code.
+    """
+
+    data: FanoutResults
     error: None = None

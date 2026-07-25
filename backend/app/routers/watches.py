@@ -12,11 +12,16 @@ from app.schemas.auth import ErrorResponse, MessageResponse
 from app.schemas.watches import (
     AddSeatsRequest,
     CreateWatchRequest,
+    FanoutRequest,
+    FanoutResponse,
+    FanoutResult,
+    FanoutResults,
     UpdateWatchRequest,
     WatchDetailResponse,
     WatchListResponse,
     WatchResponse,
 )
+from app.services import fanout as fanout_service
 from app.services import watches as watch_service
 from app.services.auth import get_current_user
 from app.services.rate_limit import limiter
@@ -62,6 +67,61 @@ async def create_watch(
         db=db,
     )
     return WatchDetailResponse(data=WatchResponse.model_validate(watch))
+
+
+@router.post(
+    "/fanout",
+    response_model=FanoutResponse,
+    responses={422: {"model": ErrorResponse}, 429: {"model": ErrorResponse}},
+    summary="Apply a seat selection across a film's other showings",
+)
+# Per-user, and the tightest limit in the app: each target costs one live
+# Cineplex request plus several DB writes, so a single call is already worth up
+# to 8 upstream requests.  Cineplex request volume from our one Canadian egress
+# IP is the project's binding constraint — 10/min bounds this endpoint to the
+# same order as the seat-map endpoint while leaving real use unhindered.
+@limiter.limit("10/minute")
+async def fanout_watches(
+    request: Request,
+    body: FanoutRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FanoutResponse:
+    """Apply seat selections to several showings of the same film at once.
+
+    Every target must be a genuine sibling of ``source_showtime_id`` — the same
+    film, on the same screen, on the same day — which the server re-derives from
+    Cineplex rather than trusting from the client.  Seats are carried per target,
+    so the same endpoint serves both "the same seats everywhere" and "a different
+    pick per showtime".
+
+    **Partial success is the contract.**  This returns 200 whenever the request
+    was well-formed; each target reports its own outcome in ``data.results``, and
+    one target failing never rolls back the others.  A target is ``skipped`` when
+    a safety guard refuses it (not a sibling, seat map doesn't match, already
+    started) and ``failed`` when something went wrong that is worth retrying.
+
+    Targets are capped at ``MAX_FANOUT_TARGETS`` by the request schema.
+    """
+    outcomes = await fanout_service.fan_out_watches(
+        user_id=user.id,
+        theatre_id=body.theatre_id,
+        source_showtime_id=body.source_showtime_id,
+        targets=[
+            fanout_service.FanoutTarget(
+                showtime_id=t.showtime_id,
+                seats=[s.model_dump() for s in t.seats],
+            )
+            for t in body.targets
+        ],
+        notify_any_seat=body.notify_any_seat,
+        name=body.name,
+        redis=request.app.state.redis,
+        db=db,
+    )
+    return FanoutResponse(
+        data=FanoutResults(results=[FanoutResult.model_validate(o) for o in outcomes])
+    )
 
 
 @router.patch(

@@ -35,3 +35,22 @@ class Showtime(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     seat_layout_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     watches: Mapped[list["Watch"]] = relationship(back_populates="showtime", cascade="all, delete-orphan")  # noqa: F821
+
+    @property
+    def experience_types(self) -> list[str]:
+        """Presentation formats for this screening — IMAX, 70mm, UltraAVX, 3D…
+
+        Read straight out of ``metadata_json["experience_types"]``, which
+        ``services/showtime_metadata._trim_metadata`` has been storing since the
+        column landed.  Exposed as a plain property (not a Pydantic computed
+        field) so every schema with ``from_attributes=True`` picks it up for
+        free, and server-side callers can read it the same way.
+
+        Always a list: a row whose metadata never resolved has a NULL
+        ``metadata_json`` and yields ``[]``.  Values are filtered to non-empty
+        strings because this blob is upstream JSON, not a validated schema.
+        """
+        raw = (self.metadata_json or {}).get("experience_types")
+        if not isinstance(raw, list):
+            return []
+        return [item.strip() for item in raw if isinstance(item, str) and item.strip()]

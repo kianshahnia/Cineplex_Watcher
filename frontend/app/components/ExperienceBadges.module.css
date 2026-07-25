@@ -1,0 +1,56 @@
+/* Presentation-format chips — a small brass "stamp" beside the showtime title.
+   Ink-navy type on filled brass: ~8.5:1 contrast, versus the silver-on-3%-white
+   these started as, which vanished into the card.
+
+   This is the only FILLED brass element in the app. That is what keeps it
+   distinct from the outlined brass seat chips on the dashboard card (tinted
+   background, brass type, brass hairline) — the two are inverses of each other
+   rather than near-duplicates.
+
+   Note this spends brass harder than the "single rare accent" rule in
+   docs/context.md: a considered exception, since a premium format is exactly
+   the kind of thing worth spotlighting. Everything else here is tuned to keep
+   it from out-shouting the Fraunces title above — 10.5px, tight padding, and a
+   +N chip that stays outlined instead of adding another solid block. */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.badge {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  /* No text-transform: tokens are Cineplex's own branding and print verbatim
+     ("70mm", not "70MM"). Only the suppression comparison is case-insensitive. */
+  padding: 3.5px 8px;
+  border-radius: 3px;
+  /* Vertical gradient reads as brushed metal, matching the design system's
+     brushed-silver language. Flat brass alone looks like a plastic tag. */
+  background: linear-gradient(180deg, var(--brass-soft) 0%, var(--brass) 100%);
+  border: 1px solid var(--brass-soft);
+  color: var(--ink);
+  white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.2);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.28) inset,
+    0 4px 12px -6px var(--brass-glow);
+}
+
+/* The overflow chip is a count, not a format — so it stays quiet and outlined
+   rather than reading as a fourth premium tag. */
+.badgeMore {
+  background: transparent;
+  border: 1px dashed var(--hair-brass);
+  color: var(--brass-soft);
+  text-shadow: none;
+  box-shadow: none;
+  cursor: default;
+}

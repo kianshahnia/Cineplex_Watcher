@@ -142,6 +142,84 @@ async def create_watch(
     return await _load_watch(watch.id, db)
 
 
+async def apply_seats_to_showtime(
+    user_id: uuid.UUID,
+    theatre_id: int,
+    showtime_id: int,
+    seats: list[dict[str, str]],
+    notify_any_seat: bool,
+    db: AsyncSession,
+    name: str | None = None,
+) -> tuple[Watch, str]:
+    """Ensure the user watches this showtime, with these seats on it.
+
+    The batch-friendly counterpart to :func:`create_watch`.  It cannot simply be
+    ``create_watch`` because that raises **409 on an already-active watch** —
+    correct for the single-showtime flow (the user pasted a link for a showtime
+    they already watch), wrong for a fan-out, where "you already watch the 7 PM"
+    should mean *add these seats to it*, not fail that target.
+
+    So this composes the existing pieces rather than duplicating them:
+
+    ==============================  ==========================================
+    Prior watch state               Behaviour
+    ==============================  ==========================================
+    none                            ``create_watch`` → ``"created"``
+    ``active``                      ``add_seats`` only → ``"updated"``
+    cancelled / expired / fulfilled ``create_watch``'s reactivate path (which
+                                    clears the old seats — documented there)
+                                    → ``"reactivated"``
+    ==============================  ==========================================
+
+    On the ``active`` path ``notify_any_seat`` and ``name`` are **not** applied.
+    Both are create-time settings for an existing watch (the watch page locks the
+    notify toggle while a watch is active, and the name is the user's own label),
+    so a fan-out silently rewriting them would be a surprise.  Seats are additive
+    and idempotent, which is exactly what a fan-out should be.
+
+    Returns the reloaded watch plus which of the three paths ran, so the caller
+    can report per-target outcomes.
+    """
+    showtime = await get_or_create_showtime(theatre_id, showtime_id, db)
+
+    existing_stmt = select(Watch).where(
+        Watch.user_id == user_id,
+        Watch.showtime_id == showtime.id,
+    )
+    result = await db.execute(existing_stmt)
+    existing = result.scalar_one_or_none()
+
+    if existing is not None and existing.status == "active":
+        watch_id = existing.id
+        action = "updated"
+    else:
+        action = "reactivated" if existing is not None else "created"
+        try:
+            watch = await create_watch(
+                user_id=user_id,
+                theatre_id=theatre_id,
+                showtime_id=showtime_id,
+                notify_any_seat=notify_any_seat,
+                db=db,
+                name=name,
+            )
+            watch_id = watch.id
+        except HTTPException as exc:
+            # 409 here means a concurrent request activated this watch between
+            # our SELECT and the insert. Not an error for a batch endpoint —
+            # the desired end state (an active watch we can add seats to) is
+            # exactly what the other request produced, so fall through to it.
+            if exc.status_code != status.HTTP_409_CONFLICT:
+                raise
+            result = await db.execute(existing_stmt)
+            watch_id = result.scalar_one().id
+            action = "updated"
+
+    if seats:
+        return await add_seats(watch_id, user_id, seats, db), action
+    return await _load_watch(watch_id, db), action
+
+
 async def update_watch(
     watch_id: uuid.UUID,
     user_id: uuid.UUID,

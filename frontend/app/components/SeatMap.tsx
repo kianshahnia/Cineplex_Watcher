@@ -16,6 +16,12 @@
  *   spreadsheet / file-explorer drag-select.
  * - Touch keeps tap-to-toggle only, so vertical/horizontal scrolling of the map
  *   still works with a finger.
+ *
+ * Session 4 (grouped mode) adds `statusMode="neutral"`: several showtimes are
+ * being edited at once, their availability genuinely differs, so any
+ * Available/Occupied colouring would be a lie for at least one of them. The one
+ * exception is `freeAt`, which marks seats already open at *some* ticked
+ * showtime — a fact that is true regardless of which one you're looking at.
  */
 import { useRef, type PointerEvent as ReactPointerEvent } from "react";
 
@@ -63,12 +69,26 @@ interface DragState {
   startY: number;
 }
 
+/** Empty, stable — shared by every "nothing is free elsewhere" render. */
+const NO_FREE: ReadonlyMap<string, string[]> = new Map();
+
 interface SeatMapProps {
   layout: SeatMapLayout;
   selectedIds?: Set<string>;
   watchedIds?: Set<string>;
   /** Seats currently animating their Occupied → Available transition. */
   flashIds?: Set<string>;
+  /**
+   * `"live"` (default) paints Available/Occupied. `"neutral"` drops that
+   * colouring entirely — used when one map stands in for several showtimes.
+   */
+  statusMode?: "live" | "neutral";
+  /**
+   * Seat id → the showtime labels where it is already Available. Drives the
+   * marker and the tooltip in neutral mode; ignored in live mode, where the
+   * fill already says it.
+   */
+  freeAt?: ReadonlyMap<string, string[]>;
   /** Set a seat's picked state. Presence of this prop enables selection. */
   onSeatPaint?: (seatId: string, select: boolean) => void;
 }
@@ -95,8 +115,11 @@ export function SeatMap({
   selectedIds,
   watchedIds,
   flashIds,
+  statusMode = "live",
+  freeAt = NO_FREE,
   onSeatPaint,
 }: SeatMapProps): JSX.Element {
+  const neutral = statusMode === "neutral";
   const cols = layout.total_columns;
   const innerW = cols * CELL_W + Math.max(0, cols - 1) * GAP_X;
   const totalW = GRID_PAD_X * 2 + innerW;
@@ -201,9 +224,18 @@ export function SeatMap({
     selectedIds,
     watchedIds,
     flashIds,
+    neutral,
+    freeAt,
     enabled: Boolean(onSeatPaint),
     onSeatClick: handleSeatClick,
   };
+
+  const freeCount = neutral
+    ? layout.rows.reduce(
+        (acc, r) => acc + r.seats.filter((s) => freeAt.has(s.id)).length,
+        0,
+      )
+    : 0;
 
   return (
     <div className={styles.wrap}>
@@ -221,7 +253,11 @@ export function SeatMap({
           viewBox={`0 0 ${totalW} ${totalH}`}
           className={styles.svg}
           role="img"
-          aria-label={`Seat map: ${availableCount} of ${seatCount} seats available across ${layout.rows.filter((r) => r.seats.length > 0).length} rows`}
+          aria-label={
+            neutral
+              ? `Seat map: ${seatCount} seats, availability not shown because several showtimes are selected. ${freeCount} already open at one of them.`
+              : `Seat map: ${availableCount} of ${seatCount} seats available across ${layout.rows.filter((r) => r.seats.length > 0).length} rows`
+          }
         >
           <defs>
             <linearGradient id="cw-screen" x1="0" y1="0" x2="0" y2="1">
@@ -245,6 +281,8 @@ export function SeatMap({
         available={availableCount}
         occupied={seatCount - availableCount}
         showWatched={Boolean(watchedIds && watchedIds.size > 0) || Boolean(onSeatPaint)}
+        neutral={neutral}
+        freeCount={freeCount}
       />
     </div>
   );
@@ -288,9 +326,18 @@ interface SeatInteract {
   selectedIds?: Set<string>;
   watchedIds?: Set<string>;
   flashIds?: Set<string>;
+  /** True when availability colouring is suppressed (grouped mode). */
+  neutral?: boolean;
+  freeAt?: ReadonlyMap<string, string[]>;
   /** Whether selection is enabled (onSeatPaint was provided). */
   enabled?: boolean;
   onSeatClick?: (seat: SeatDetail) => void;
+}
+
+/** "3:00 PM", "3:00 PM and 7:00 PM", "3:00 PM, 7:00 PM and 11:00 PM". */
+function joinLabels(labels: string[]): string {
+  if (labels.length <= 1) return labels[0] ?? "";
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
 }
 
 function renderRow(
@@ -352,17 +399,28 @@ function Seat({
   const isOccupied = seat.status === "Occupied";
   const isUnknown = !isAvailable && !isOccupied;
   const isSpecial = seat.type === "Wheelchair" || seat.type === "Companion";
+  const neutral = Boolean(interact.neutral);
 
   const isSelected = interact.selectedIds?.has(seat.id) ?? false;
   const isWatched = interact.watchedIds?.has(seat.id) ?? false;
-  const isFlashing = interact.flashIds?.has(seat.id) ?? false;
+  const isFlashing = !neutral && (interact.flashIds?.has(seat.id) ?? false);
   const isInteractive = Boolean(interact.enabled) && !isUnknown && !isWatched;
+  // Only meaningful in neutral mode: in live mode the fill already says it.
+  const freeLabels = neutral ? interact.freeAt?.get(seat.id) : undefined;
+  const isFreeElsewhere = Boolean(freeLabels && freeLabels.length > 0);
 
-  const stateClass = isAvailable
-    ? styles.available
-    : isOccupied
-      ? styles.occupied
-      : styles.unknown;
+  // In neutral mode every known seat gets the same fill — the whole point is
+  // that we are not claiming a status. Unknown seats keep their dashed outline
+  // because "this seat isn't in the availability map" is still true.
+  const stateClass = neutral
+    ? isUnknown
+      ? styles.unknown
+      : styles.neutral
+    : isAvailable
+      ? styles.available
+      : isOccupied
+        ? styles.occupied
+        : styles.unknown;
 
   const className = cx(
     styles.seat,
@@ -376,7 +434,8 @@ function Seat({
 
   const tooltipParts = [
     seat.label,
-    seat.status,
+    neutral ? null : seat.status,
+    isFreeElsewhere && `already free at ${joinLabels(freeLabels ?? [])}`,
     isFlashing && "just opened",
     isWatched && "already watching",
     isSelected && "selected",
@@ -384,7 +443,7 @@ function Seat({
   ].filter((p): p is string => typeof p === "string" && p.length > 0);
   const tooltip = tooltipParts.join(" · ");
 
-  return (
+  const rect = (
     <rect
       x={x}
       y={y}
@@ -404,6 +463,23 @@ function Seat({
       <title>{tooltip}</title>
     </rect>
   );
+
+  if (!isFreeElsewhere) return rect;
+
+  return (
+    <>
+      {rect}
+      {/* `pointer-events: none` keeps the marker out of hit-testing, so both the
+          click handler and the drag-paint's elementFromPoint still resolve to
+          the rect underneath — and the rect's <title> still wins the tooltip. */}
+      <circle
+        cx={x + CELL_W / 2}
+        cy={y + CELL_H / 2}
+        r={2.6}
+        className={styles.freeMark}
+      />
+    </>
+  );
 }
 
 function SeatLegend({
@@ -411,23 +487,48 @@ function SeatLegend({
   available,
   occupied,
   showWatched,
+  neutral,
+  freeCount,
 }: {
   total: number;
   available: number;
   occupied: number;
   showWatched: boolean;
+  neutral: boolean;
+  freeCount: number;
 }): JSX.Element {
   return (
     <div className={styles.legendRow}>
       <ul className={styles.legend}>
-        <li className={styles.legendItem}>
-          <span className={`${styles.chip} ${styles.chipAvailable}`} aria-hidden="true" />
-          Available
-        </li>
-        <li className={styles.legendItem}>
-          <span className={`${styles.chip} ${styles.chipOccupied}`} aria-hidden="true" />
-          Occupied
-        </li>
+        {neutral ? (
+          <>
+            <li className={styles.legendItem}>
+              <span
+                className={`${styles.chip} ${styles.chipNeutral}`}
+                aria-hidden="true"
+              />
+              Seat
+            </li>
+            <li className={styles.legendItem}>
+              <span
+                className={`${styles.chip} ${styles.chipFree}`}
+                aria-hidden="true"
+              />
+              Free at one of these times
+            </li>
+          </>
+        ) : (
+          <>
+            <li className={styles.legendItem}>
+              <span className={`${styles.chip} ${styles.chipAvailable}`} aria-hidden="true" />
+              Available
+            </li>
+            <li className={styles.legendItem}>
+              <span className={`${styles.chip} ${styles.chipOccupied}`} aria-hidden="true" />
+              Occupied
+            </li>
+          </>
+        )}
         <li className={styles.legendItem}>
           <span className={`${styles.chip} ${styles.chipSpecial}`} aria-hidden="true" />
           Accessible
@@ -451,14 +552,28 @@ function SeatLegend({
           </>
         ) : null}
       </ul>
-      <div className={styles.tally}>
-        <span className={styles.tallyNumber}>{available}</span>
-        <span className={styles.tallySep}>/</span>
-        <span className={styles.tallyTotal}>{total}</span>
-        <span className={styles.tallyLabel}>seats open</span>
-        <span className={styles.tallyDot} aria-hidden="true" />
-        <span className={styles.tallyDim}>{occupied} taken</span>
-      </div>
+      {/* The open/taken tally belongs to one showtime. In neutral mode it would
+          be a number for whichever showtime happened to supply the layout, so
+          it is replaced by the one count that *is* true across the set. */}
+      {neutral ? (
+        <div className={styles.tally}>
+          <span className={styles.tallyNumber}>{freeCount}</span>
+          <span className={styles.tallyLabel}>
+            {freeCount === 1 ? "seat already free" : "seats already free"}
+          </span>
+          <span className={styles.tallyDot} aria-hidden="true" />
+          <span className={styles.tallyDim}>at one of these times</span>
+        </div>
+      ) : (
+        <div className={styles.tally}>
+          <span className={styles.tallyNumber}>{available}</span>
+          <span className={styles.tallySep}>/</span>
+          <span className={styles.tallyTotal}>{total}</span>
+          <span className={styles.tallyLabel}>seats open</span>
+          <span className={styles.tallyDot} aria-hidden="true" />
+          <span className={styles.tallyDim}>{occupied} taken</span>
+        </div>
+      )}
     </div>
   );
 }

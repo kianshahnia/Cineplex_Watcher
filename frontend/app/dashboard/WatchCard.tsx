@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useState } from "react";
 
+import { ExperienceBadges } from "@/app/components/ExperienceBadges";
+import { filterExperienceTypes } from "@/lib/experienceTypes";
 import type { Watch } from "@/lib/api";
 import styles from "./WatchCard.module.css";
 
@@ -82,6 +84,10 @@ export function WatchCard({
   const showtimeAt = formatShowtime(
     showtime_at ?? showtime.showtime_local ?? showtime.showtime_at,
   );
+  // Only decides whether the "details unavailable" fallback still applies —
+  // the badges component re-applies the suppression rule itself.
+  const hasFormats =
+    filterExperienceTypes(showtime.experience_types, displayName).length > 0;
   const statusInfo = STATUS_COPY[status];
 
   const seatLabels = sortLabels(seats.map((s) => s.seat_label));
@@ -178,7 +184,12 @@ export function WatchCard({
         {showtimeAt ? (
           <span className={styles.metaItem}>{showtimeAt}</span>
         ) : null}
-        {!theaterName && !showtimeAt ? (
+        <ExperienceBadges
+          types={showtime.experience_types}
+          title={displayName}
+          max={3}
+        />
+        {!theaterName && !showtimeAt && !hasFormats ? (
           <span className={`${styles.metaItem} ${styles.metaDim}`}>
             Showtime details unavailable
           </span>

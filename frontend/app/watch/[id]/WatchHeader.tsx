@@ -2,6 +2,8 @@
 
 import { useRef, useState } from "react";
 
+import { ExperienceBadges } from "@/app/components/ExperienceBadges";
+import { filterExperienceTypes } from "@/lib/experienceTypes";
 import type { ShowtimeWithSeats } from "@/lib/api";
 import styles from "./WatchHeader.module.css";
 
@@ -64,6 +66,10 @@ export function WatchHeader({
   const showtimeAt = formatShowtime(
     watchShowtimeAt ?? showtime.showtime_local ?? showtime.showtime_at,
   );
+  // Only to decide whether the meta row has anything to show — the badges
+  // component owns the suppression rule and applies it again itself.
+  const hasFormats =
+    filterExperienceTypes(showtime.experience_types, displayName).length > 0;
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -153,11 +159,7 @@ export function WatchHeader({
               void commit();
             }}
           />
-          <span className={styles.editHint}>
-            {renaming
-              ? "Saving…"
-              : "Enter to save · Esc to cancel · blank restores the movie title"}
-          </span>
+
         </div>
       ) : canEdit ? (
         <h1 className={styles.title}>
@@ -177,7 +179,7 @@ export function WatchHeader({
         <h1 className={styles.title}>{displayName}</h1>
       )}
 
-      {(theaterName || showtimeAt) && (
+      {(theaterName || showtimeAt || hasFormats) && (
         <div className={styles.metaRow}>
           {theaterName ? (
             <span className={styles.metaItem}>{theaterName}</span>
@@ -188,6 +190,10 @@ export function WatchHeader({
           {showtimeAt ? (
             <span className={styles.metaItem}>{showtimeAt}</span>
           ) : null}
+          <ExperienceBadges
+            types={showtime.experience_types}
+            title={displayName}
+          />
         </div>
       )}
     </header>

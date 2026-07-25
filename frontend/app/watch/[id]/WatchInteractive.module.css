@@ -1,3 +1,28 @@
+/* --- seat-map placeholder (a sibling tab loading or failing) -------- */
+/* Sits where the SeatMap would, keeping the card's height from collapsing as
+   the user moves between times. */
+
+.mapNotice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 220px;
+  padding: 24px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  color: var(--silver);
+  text-align: center;
+}
+
+.mapNoticeTag {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #d97676;
+}
+
 /* --- action panel (below) ------------------------------------------- */
 
 .panel {
@@ -340,6 +365,95 @@
 .clearLink:hover {
   color: var(--platinum);
   border-bottom-color: var(--silver-deep);
+}
+
+/* --- cross-showtime note -------------------------------------------- */
+
+.spanNote {
+  margin: 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--hair);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--brass-soft);
+}
+
+/* --- per-showtime results list -------------------------------------- */
+/* Replaces the chip row's job after a multi-showtime submit: one line per
+   showtime touched, so a partial success reads as a partial success rather
+   than a single ambiguous banner. */
+
+.results {
+  list-style: none;
+  margin: 0;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--hair-strong);
+  border-radius: 8px;
+  background: rgba(6, 10, 20, 0.45);
+}
+
+.resultRow {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+}
+
+.resultMark {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  width: 1em;
+  text-align: center;
+}
+
+.resultMarkOk {
+  color: var(--brass);
+}
+
+.resultMarkBad {
+  color: #d97676;
+}
+
+.resultTime {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: var(--platinum);
+  white-space: nowrap;
+}
+
+.resultBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.resultText,
+.resultTextBad {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.resultText {
+  color: var(--silver);
+}
+
+.resultTextBad {
+  color: #d97676;
+}
+
+.resultFree {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--brass-soft);
 }
 
 /* --- commit footer: status text + cancel link ----------------------- */

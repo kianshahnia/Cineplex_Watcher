@@ -48,23 +48,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.showtime import Showtime
-from app.services import cineplex_key
+from app.services import cineplex_theatrical
+from app.services.cineplex_theatrical import TheatricalOutcome
 
 log = structlog.get_logger()
-
-# Note this is a DIFFERENT API product path from `cineplex.CINEPLEX_API_BASE`
-# (`/prod/ticketing/…`): same host and same Imperva front door, but with an
-# Azure APIM subscription gate on top.  Hence the separate constant and the
-# separate key manager.
-CINEPLEX_THEATRICAL_API_BASE = "https://apis.cineplex.com/prod/cpx/theatrical/api/v1"
-
-_USER_AGENT = "Cinewatch/1.0 (+https://cinewatch.ca)"
 
 # Deliberately short.  This call happens inline in the server-side render of the
 # watch page, so a slow upstream would show up directly as a slow page load.
@@ -142,77 +134,51 @@ async def resolve_showtime_metadata(
     Never raises.  ``None`` means "no metadata this time" for any reason: the
     feature is unconfigured, we are inside a cooldown, the pair is unknown
     upstream, or the request failed.  Callers should treat it as a non-event.
+
+    The request itself lives in ``services/cineplex_theatrical.py`` — shared with
+    the sibling-showtime lookup, which hits the same endpoint.  What stays here
+    is the *policy*: which outcomes earn a cooldown, and how long a one.
     """
     if await _in_cooldown(redis, theatre_id, showtime_id):
         return None
 
-    key = await cineplex_key.get_api_key(redis)
-    if not key:
-        # No key configured → dev-mode no-op, same as TMDB / Resend / Twilio.
+    result = await cineplex_theatrical.fetch_showtime(
+        theatre_id, showtime_id, redis, timeout_sec=_REQUEST_TIMEOUT_SEC
+    )
+
+    if result.outcome is TheatricalOutcome.NO_KEY:
+        # Unconfigured is a state, not a failure — no cooldown, because there is
+        # nothing to back off from and the very next request should try again the
+        # moment a key is set.
         await log.ainfo("showtime_metadata_skipped_no_key", theatre_id=theatre_id)
         return None
 
-    try:
-        async with httpx.AsyncClient(
-            timeout=_REQUEST_TIMEOUT_SEC,
-            headers={"User-Agent": _USER_AGENT},
-        ) as client:
-            resp = await _request_metadata(client, theatre_id, showtime_id, key)
-
-            if resp.status_code == 401:
-                resp = await _retry_with_refreshed_key(
-                    client,
-                    redis,
-                    theatre_id,
-                    showtime_id,
-                    failed_key=key,
-                )
-                if resp is None:
-                    await _set_cooldown(redis, theatre_id, showtime_id, _COOLDOWN_TRANSIENT_SEC)
-                    return None
-
-            if resp.status_code == 404:
-                # Not an error: an expired or mistyped showtime is a normal
-                # thing for a user to paste.
-                await log.ainfo(
-                    "showtime_metadata_not_found",
-                    theatre_id=theatre_id,
-                    showtime_id=showtime_id,
-                )
-                await _set_cooldown(redis, theatre_id, showtime_id, _COOLDOWN_NOT_FOUND_SEC)
-                return None
-
-            if resp.status_code != 200:
-                await log.awarning(
-                    "showtime_metadata_non_200",
-                    theatre_id=theatre_id,
-                    showtime_id=showtime_id,
-                    status_code=resp.status_code,
-                )
-                await _set_cooldown(redis, theatre_id, showtime_id, _COOLDOWN_TRANSIENT_SEC)
-                return None
-
-            payload = resp.json()
-    except httpx.HTTPError as exc:
-        await log.awarning(
-            "showtime_metadata_request_failed",
+    if result.outcome is TheatricalOutcome.NOT_FOUND:
+        # Not an error: an expired or mistyped showtime is a normal thing for a
+        # user to paste.
+        await log.ainfo(
+            "showtime_metadata_not_found",
             theatre_id=theatre_id,
             showtime_id=showtime_id,
-            error=str(exc),
         )
-        await _set_cooldown(redis, theatre_id, showtime_id, _COOLDOWN_TRANSIENT_SEC)
+        await _set_cooldown(redis, theatre_id, showtime_id, _COOLDOWN_NOT_FOUND_SEC)
         return None
-    except ValueError as exc:  # resp.json() on a non-JSON body
+
+    if not result.is_ok:
+        # Transport already logged the specific cause (`cineplex_theatrical_*`);
+        # this line records the back-off decision that follows from it.
         await log.awarning(
-            "showtime_metadata_bad_json",
+            "showtime_metadata_unresolved",
             theatre_id=theatre_id,
             showtime_id=showtime_id,
-            error=str(exc),
+            outcome=result.outcome.value,
+            status_code=result.status_code,
+            error=result.detail,
         )
         await _set_cooldown(redis, theatre_id, showtime_id, _COOLDOWN_TRANSIENT_SEC)
         return None
 
-    resolved = parse_metadata_response(payload)
+    resolved = parse_metadata_response(result.payload or {})
     if not resolved.is_usable:
         # A 200 that carries nothing we can store.  Treat as transient — the
         # shape may have changed, and hammering it won't help.
@@ -232,50 +198,6 @@ async def resolve_showtime_metadata(
         showtime_local=resolved.showtime_local.isoformat() if resolved.showtime_local else None,
     )
     return resolved
-
-
-async def _request_metadata(
-    client: httpx.AsyncClient,
-    theatre_id: int,
-    showtime_id: int,
-    key: str,
-) -> httpx.Response:
-    """One GET against the theatrical endpoint.  Status handling is the caller's."""
-    url = f"{CINEPLEX_THEATRICAL_API_BASE}/theatres/{theatre_id}/showtimes/{showtime_id}"
-    return await client.get(url, headers={"Ocp-Apim-Subscription-Key": key})
-
-
-async def _retry_with_refreshed_key(
-    client: httpx.AsyncClient,
-    redis,
-    theatre_id: int,
-    showtime_id: int,
-    *,
-    failed_key: str,
-) -> httpx.Response | None:
-    """Re-scrape the key and retry, returning the first non-401 response.
-
-    The retry **is** the validation: there is no way to tell a good key from a
-    stale one by inspection, and the bundle legitimately contains more than one
-    valid key plus a placeholder.  A non-401 (including a 404 for an unknown
-    pair) proves the subscription gate accepted the key, so it is stored for
-    every other worker to use.
-
-    Returns ``None`` when no candidate worked — the caller must not loop.
-    """
-    candidates = await cineplex_key.refresh_candidates(redis, failed_key=failed_key)
-    for candidate in candidates:
-        resp = await _request_metadata(client, theatre_id, showtime_id, candidate)
-        if resp.status_code != 401:
-            await cineplex_key.store_api_key(redis, candidate)
-            await log.awarning("cineplex_key_refreshed", tried=len(candidates))
-            return resp
-
-    # ERROR, not warning: the metadata feature is now fully dark until someone
-    # intervenes.  This is the same class of alarm as the upstream-403 canary —
-    # wire it into alerting alongside it.
-    await log.aerror("cineplex_key_refresh_failed", candidates=len(candidates))
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -335,8 +257,8 @@ def parse_metadata_response(payload: dict[str, Any]) -> ResolvedMetadata:
         # null row labels — see services/cineplex.py.
         movie_name=_clean_name(payload.get("movie")),
         theater_name=_clean_name(payload.get("theatre")),
-        showtime_at=_parse_aware_utc(showtime_block.get("showStartDateTimeUtc")),
-        showtime_local=_parse_naive_local(showtime_block.get("showStartDateTime")),
+        showtime_at=cineplex_theatrical.parse_aware_utc(showtime_block.get("showStartDateTimeUtc")),
+        showtime_local=cineplex_theatrical.parse_naive_local(showtime_block.get("showStartDateTime")),
         metadata_json=_trim_metadata(payload),
     )
 
@@ -346,8 +268,12 @@ def _trim_metadata(payload: dict[str, Any]) -> dict[str, Any]:
 
     Dropped deliberately:
 
-    * ``alternativeShowtimes`` — large, and a different feature ("watch another
-      screening of this film") that would want fresh data anyway;
+    * ``alternativeShowtimes`` — large, and consumed by a different feature
+      (``services/showtime_alternatives.py``) that wants *fresh* data.  This blob
+      is written once and never refreshed, because a resolved row is permanently
+      skipped by :func:`should_resolve` — so a sibling list stored here would
+      freeze on first view and never pick up a showtime Cineplex adds later.  For
+      a picker whose whole job is "show me my options", stale options are a bug;
     * ``location`` as a block — it carries ``distanceToOriginInMeters``, which
       is computed from the *caller's* IP and so is meaningless once cached.  The
       two static facts in it (city, province) are kept;
@@ -385,46 +311,6 @@ def _clean_name(value: Any) -> str | None:
     if not cleaned:
         return None
     return cleaned[:_NAME_MAX_LEN]
-
-
-def _parse_aware_utc(value: Any) -> datetime | None:
-    """Parse ``2026-07-25T18:00:00Z`` into an aware UTC datetime.
-
-    Python 3.11+ accepts the trailing ``Z`` in ``fromisoformat``; the explicit
-    ``tzinfo`` fallback covers an offset-less value, which would otherwise land
-    in ``showtime_at`` as naive and silently break every ``now() -`` comparison
-    that column exists to serve.
-    """
-    parsed = _parse_iso(value)
-    if parsed is None:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def _parse_naive_local(value: Any) -> datetime | None:
-    """Parse ``2026-07-25T11:00:00`` into a *naive* datetime.
-
-    Any offset is stripped rather than converted: this value is a theatre-local
-    wall clock destined for a ``TIMESTAMP WITHOUT TIME ZONE`` column, and
-    normalizing it to UTC is exactly the bug we are storing two columns to
-    avoid.  Mirrors ``_clean_showtime_at`` in ``schemas/watches.py``.
-    """
-    parsed = _parse_iso(value)
-    if parsed is None:
-        return None
-    return parsed.replace(tzinfo=None)
-
-
-def _parse_iso(value: Any) -> datetime | None:
-    """Best-effort ISO-8601 parse that returns ``None`` instead of raising."""
-    if not isinstance(value, str) or not value.strip():
-        return None
-    try:
-        return datetime.fromisoformat(value.strip())
-    except ValueError:
-        return None
 
 
 # ---------------------------------------------------------------------------

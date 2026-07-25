@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.schemas.auth import ErrorResponse
 from app.schemas.showtimes import (
+    AlternativesResponse,
     ParsedIds,
     ParseUrlRequest,
     ParseUrlResponse,
@@ -14,8 +15,10 @@ from app.schemas.showtimes import (
     ShowtimeDetail,
     ShowtimeSeatsResponse,
     ShowtimeWithSeats,
+    SiblingShowtimes,
 )
 from app.services import cineplex as cineplex_service
+from app.services import showtime_alternatives as alternatives_service
 from app.services import showtime_metadata as metadata_service
 from app.services import watches as watch_service
 from app.services.rate_limit import ip_key, limiter
@@ -97,6 +100,45 @@ async def get_showtime_seats(
             is_post_showtime=availability_data.get("isPostShowtime", False),
         )
     )
+
+
+@router.get(
+    "/{theatre_id}/{showtime_id}/alternatives",
+    response_model=AlternativesResponse,
+    responses={429: {"model": ErrorResponse}},
+    summary="List the same film's other showings on the same screen",
+)
+# Per-IP, matching the seat-map endpoint above and for the same reason: a cache
+# miss here reaches the upstream Cineplex API, and uncontrolled fan-out is what
+# could get OUR server IP banned.  The 5-minute Redis cache means a real user
+# toggling around a watch page rarely reaches upstream at all.
+@limiter.limit("30/minute", key_func=ip_key)
+async def get_showtime_alternatives(
+    request: Request,
+    theatre_id: int,
+    showtime_id: int,
+) -> AlternativesResponse:
+    """Return the other showings of this film in this auditorium on this day.
+
+    Powers the watch page's showtime switcher, which lets a user apply one seat
+    selection across several screenings instead of repeating the flow per time.
+
+    Unauthenticated, like the seat-map endpoint — the switcher is part of the
+    signed-out preview.  Touches no database: siblings are read live from
+    Cineplex (through a short Redis cache) rather than from
+    ``showtimes.metadata_json``, because that blob is written once and would
+    freeze the list on first view.
+
+    **Never fails on upstream trouble.**  A missing key, a 404, or a network
+    error all return an empty ``alternatives`` list, which the frontend renders
+    as "no switcher" — the same thing it shows for a film with a single showing.
+    """
+    sibling_set = await alternatives_service.list_alternatives(
+        theatre_id,
+        showtime_id,
+        request.app.state.redis,
+    )
+    return AlternativesResponse(data=SiblingShowtimes.model_validate(sibling_set))
 
 
 @router.post(

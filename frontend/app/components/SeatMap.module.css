@@ -95,6 +95,22 @@
   stroke-dasharray: 2 2;
 }
 
+/* Grouped mode: a seat whose status we deliberately aren't stating. Reads as
+   "a seat" — flatter than Available, lighter than Occupied, so it can't be
+   mistaken for either. */
+.neutral {
+  fill: rgba(214, 219, 228, 0.13);
+  stroke: var(--hair-strong);
+  stroke-width: 1;
+}
+
+/* The one fact that is true across every ticked showtime: this seat is already
+   open at (at least) one of them. Hover names which — see the rect's <title>. */
+.freeMark {
+  fill: var(--brass);
+  pointer-events: none;
+}
+
 .special {
   stroke: var(--brass-dim);
   stroke-width: 1;
@@ -116,6 +132,12 @@
   opacity: 0.85;
   stroke: var(--brass-dim);
   stroke-width: 1.25;
+}
+
+.interactive.neutral:hover {
+  fill: rgba(200, 168, 107, 0.28);
+  stroke: var(--brass);
+  stroke-width: 1.5;
 }
 
 /* selected = picked locally, not yet committed */
@@ -223,6 +245,24 @@
 .chipOccupied {
   background: var(--steel-hi);
   opacity: 0.55;
+}
+
+.chipNeutral {
+  background: rgba(214, 219, 228, 0.13);
+  border: 1px solid var(--hair-strong);
+  box-sizing: border-box;
+}
+
+.chipFree {
+  background:
+    radial-gradient(
+      circle at 50% 50%,
+      var(--brass) 0 2.6px,
+      transparent 2.7px 100%
+    ),
+    rgba(214, 219, 228, 0.13);
+  border: 1px solid var(--hair-strong);
+  box-sizing: border-box;
 }
 
 .chipSpecial {
