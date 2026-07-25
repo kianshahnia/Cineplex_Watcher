@@ -55,6 +55,21 @@ class Settings(BaseSettings):
     # ISO-3166-1 region used to scope "now playing" to Canadian release windows.
     tmdb_region: str = "CA"
 
+    # Cineplex theatrical API (auto-resolved showtime metadata)
+    # The Azure APIM subscription key sent as `Ocp-Apim-Subscription-Key`. It is
+    # NOT a user credential — Cineplex ships it to every visitor in their public
+    # JS bundle — but it does not belong in tracked files, so it lives here via
+    # .env. Blank = metadata resolution is disabled and every showtime keeps the
+    # "Your watched showtime" placeholder: the same dev-mode no-op convention as
+    # TMDB / Resend / Twilio.
+    cineplex_api_key: str = ""
+    # When the key rotates upstream, every request starts returning 401. With
+    # this on, the backend re-scrapes the current key from Cineplex's public
+    # bundle and retries once, so a rotation self-heals instead of needing a
+    # redeploy. Turn off to pin behaviour to the .env value alone (e.g. if the
+    # scrape ever starts misbehaving in production).
+    cineplex_key_autoscrape: bool = True
+
     # Logging (Phase 5 Step 3)
     # Set LOG_LEVEL=DEBUG to see SQL queries and verbose service output.
     log_level: str = "INFO"

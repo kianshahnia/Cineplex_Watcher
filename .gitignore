@@ -39,10 +39,15 @@ redisdata/
 .claude/settings.local.json
 
 # Project-specific
+docs/
 test_scraper.py
+backend/verify_*.py
 CLAUDE.local.md
 docs/context.md
 docs/bugs.md
 docs/frontend_issues.md
 docs/features_to_add.md
 docs/deployment.md
+docs/project_summary_for_resume.md
+docs/scaling.md
+docs/plan_auto_metadata.md
