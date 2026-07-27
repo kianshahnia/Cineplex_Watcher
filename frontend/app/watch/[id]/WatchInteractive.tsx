@@ -1310,6 +1310,7 @@ function ActionPanel({
                 count={pendingCount}
                 labels={pendingLabels}
                 onClear={onClearSelection}
+                watchedCount={watchedLabels.length}
               />
             </>
           ) : existingIsAll ? (
@@ -1336,6 +1337,7 @@ function ActionPanel({
                 labels={pendingLabels}
                 onClear={onClearSelection}
                 addMode
+                watchedCount={watchedLabels.length}
               />
             </>
           ) : allowWatchAll ? (
@@ -1541,19 +1543,35 @@ function SelectionSummary({
   labels,
   onClear,
   addMode = false,
+  watchedCount = 0,
 }: {
   count: number;
   labels: string[];
   onClear: () => void;
   addMode?: boolean;
+  /** Seats already committed in whatever this panel is scoped to. Only used to
+   *  keep the headline figure honest when there is nothing pending. */
+  watchedCount?: number;
 }): JSX.Element {
+  // The numeral is the panel's focal figure, so it has to state something true.
+  // Straight after a save there are no pending picks, and printing "0 seats
+  // picked" under a list of freshly-saved seats reads as "nothing happened" —
+  // the exact opposite of what just occurred. When there is nothing to commit
+  // but seats *are* on watch, the figure reports those instead. A genuinely
+  // empty panel (nothing picked, nothing watched) still shows 0: there it's the
+  // invitation to start, not a report on work already done.
+  const showingWatched = count === 0 && watchedCount > 0;
+  const figure = showingWatched ? watchedCount : count;
+  const noun = figure === 1 ? "seat" : "seats";
+
   return (
     <div className={styles.selSummary}>
       <div className={styles.numeralBlock}>
-        <span className={styles.numeral}>{count}</span>
+        <span className={styles.numeral}>{figure}</span>
         <span className={styles.numeralLabel}>
-          {count === 1 ? "seat picked" : "seats picked"}
-          {addMode && count > 0 ? " to add" : ""}
+          {showingWatched
+            ? `${noun} on watch`
+            : `${noun} picked${addMode && count > 0 ? " to add" : ""}`}
         </span>
       </div>
       {labels.length > 0 ? (
@@ -1571,8 +1589,9 @@ function SelectionSummary({
         </>
       ) : (
         <p className={styles.hint}>
-          Click a seat to pick it — or click and drag across several at once.
-          Occupied seats too; we ping you when a watched seat opens up.
+          {showingWatched
+            ? "Click another seat to add it to this watch — or click and drag across several at once."
+            : "Click a seat to pick it — or click and drag across several at once. Occupied seats too; we ping you when a watched seat opens up."}
         </p>
       )}
     </div>
