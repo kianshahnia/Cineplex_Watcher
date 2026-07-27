@@ -420,7 +420,26 @@ async def _require_active_watch(
 
 
 async def _load_watch(watch_id: uuid.UUID, db: AsyncSession) -> Watch:
-    """Re-fetch a watch with its relationships eagerly loaded for serialization."""
+    """Re-fetch a watch with its relationships eagerly loaded for serialization.
+
+    ``populate_existing`` is load-bearing, not a precaution.  A loader option
+    will **not** overwrite an attribute that is already loaded on an instance
+    sitting in the session's identity map — and ``app/database.py`` builds the
+    sessionmaker with ``expire_on_commit=False``, so a commit doesn't clear it
+    either.  Any flow that calls this twice in one session with an INSERT in
+    between therefore gets the *first* call's collection back.
+
+    That is exactly the shape of :func:`apply_seats_to_showtime` on its
+    ``created`` / ``reactivated`` paths: ``create_watch`` loads
+    ``watched_seats`` as ``[]``, ``add_seats`` inserts the rows by FK (which
+    never touches the parent's collection), and the reload would hand back the
+    stale empty list — reporting ``seats_applied: 0`` for a watch that really
+    has 25 seats.  The single-showtime flow hid this because each of its two
+    HTTP requests gets a fresh session; fan-out does the whole batch in one.
+
+    ``populate_existing=True`` forces the refresh.  Every call site here runs
+    after a commit, so there are never unflushed changes for it to discard.
+    """
     stmt = (
         select(Watch)
         .where(Watch.id == watch_id)
@@ -428,6 +447,7 @@ async def _load_watch(watch_id: uuid.UUID, db: AsyncSession) -> Watch:
             selectinload(Watch.watched_seats),
             selectinload(Watch.showtime),
         )
+        .execution_options(populate_existing=True)
     )
     result = await db.execute(stmt)
     return result.scalar_one()
