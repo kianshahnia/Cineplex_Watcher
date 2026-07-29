@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 
 import {
   ApiError,
@@ -12,7 +12,22 @@ import {
   updateWatch,
 } from "@/lib/api";
 import type { CurrentUser, Watch, WatchStatus } from "@/lib/api";
+import {
+  MAX_REMEMBERED_EXPANDED,
+  defaultPrefs,
+  loadPrefs,
+  normalizePrefs,
+  savePrefs,
+} from "@/lib/dashboardPrefs";
+import type { DashboardPrefs } from "@/lib/dashboardPrefs";
+import {
+  GROUP_BY_VALUES,
+  groupWatches,
+  sortOptionsFor,
+} from "@/lib/watchGrouping";
+import type { GroupBy, SortBy } from "@/lib/watchGrouping";
 import { WatchCard } from "./WatchCard";
+import { WatchGroupCard } from "./WatchGroupCard";
 import styles from "./Dashboard.module.css";
 
 type LoadState =
@@ -29,6 +44,22 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "all", label: "All" },
 ];
 
+const GROUP_BY_LABEL: Record<GroupBy, string> = {
+  movie: "Movie",
+  date: "Date",
+  theatre: "Theatre",
+  format: "Format",
+  none: "None",
+};
+
+const SORT_BY_LABEL: Record<SortBy, string> = {
+  showtime: "Soonest showtime",
+  added: "Recently added",
+  name: "Name",
+  format: "Format",
+  theatre: "Theatre",
+};
+
 export function DashboardClient(): JSX.Element {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [filter, setFilter] = useState<FilterKey>("active");
@@ -36,6 +67,10 @@ export function DashboardClient(): JSX.Element {
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  // How the list is grouped and sorted, and which rows are open. Persisted to
+  // localStorage — see the hydration pair below.
+  const [prefs, setPrefs] = useState<DashboardPrefs>(defaultPrefs);
+  const [hydrated, setHydrated] = useState(false);
 
   const load = useCallback(async (): Promise<void> => {
     setState({ kind: "loading" });
@@ -61,6 +96,23 @@ export function DashboardClient(): JSX.Element {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Read the stored preferences in a mount effect, never during render: this
+  // component is still server-rendered, so an inline localStorage read would
+  // desync hydration — the same reason `WatchInteractive` restores its seat
+  // selection in an effect.
+  useEffect(() => {
+    setPrefs(loadPrefs());
+    setHydrated(true);
+  }, []);
+
+  // Write them back on every change. `hydrated` is state rather than a ref so
+  // this can't fire on the first commit and overwrite the stored blob with the
+  // defaults before the load effect's result has landed.
+  useEffect(() => {
+    if (!hydrated) return;
+    savePrefs(prefs);
+  }, [hydrated, prefs]);
 
   const onCancel = useCallback(
     async (watch: Watch): Promise<void> => {
@@ -175,22 +227,97 @@ export function DashboardClient(): JSX.Element {
     return init;
   }, [state]);
 
+  // Status filtering only — ordering now belongs to `groupWatches`, which sorts
+  // within each group and between them from a total comparator, so the order
+  // here could not influence the result anyway.
   const visibleWatches = useMemo<Watch[]>(() => {
     if (state.kind !== "ready") return [];
-    const list =
-      filter === "all"
-        ? state.watches
-        : state.watches.filter((w) => w.status === filter);
-    return [...list].sort((a, b) => {
-      // Active first, then most-recently-created.
-      const aActive = a.status === "active" ? 0 : 1;
-      const bActive = b.status === "active" ? 0 : 1;
-      if (aActive !== bActive) return aActive - bActive;
-      return (
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
-    });
+    return filter === "all"
+      ? state.watches
+      : state.watches.filter((w) => w.status === filter);
   }, [state, filter]);
+
+  const groups = useMemo(
+    () => groupWatches(visibleWatches, prefs.groupBy, prefs.sortBy),
+    [visibleWatches, prefs.groupBy, prefs.sortBy],
+  );
+
+  const expandedSet = useMemo(
+    () => new Set(prefs.expanded),
+    [prefs.expanded],
+  );
+
+  // Collapsing the only group on the page is pointless, so a lone group always
+  // renders open regardless of what's remembered.
+  const soleGroup = groups.length === 1;
+  const isOpen = useCallback(
+    (key: string): boolean => soleGroup || expandedSet.has(key),
+    [soleGroup, expandedSet],
+  );
+
+  const onToggleGroup = useCallback((key: string): void => {
+    setPrefs((prev) => {
+      const expanded = prev.expanded.includes(key)
+        ? prev.expanded.filter((k) => k !== key)
+        : // Newest first, so the cap evicts the least recently opened row.
+          [key, ...prev.expanded].slice(0, MAX_REMEMBERED_EXPANDED);
+      return { ...prev, expanded };
+    });
+  }, []);
+
+  // Switching modes goes through `normalizePrefs`, so a `sortBy` the new mode
+  // doesn't offer resets to the default instead of silently doing nothing.
+  const onGroupByChange = useCallback((groupBy: GroupBy): void => {
+    setPrefs((prev) => normalizePrefs({ ...prev, groupBy }));
+  }, []);
+
+  const onSortByChange = useCallback((sortBy: SortBy): void => {
+    setPrefs((prev) => normalizePrefs({ ...prev, sortBy }));
+  }, []);
+
+  const allExpanded = groups.length > 0 && groups.every((g) => isOpen(g.key));
+
+  // Only the rows currently on screen are touched — keys belonging to another
+  // grouping mode or another status filter keep whatever state they had.
+  const onToggleAll = useCallback((): void => {
+    const keys = groups.map((g) => g.key);
+    const onScreen = new Set(keys);
+    setPrefs((prev) => {
+      const untouched = prev.expanded.filter((k) => !onScreen.has(k));
+      return {
+        ...prev,
+        expanded: allExpanded
+          ? untouched
+          : [...keys, ...untouched].slice(0, MAX_REMEMBERED_EXPANDED),
+      };
+    });
+  }, [groups, allExpanded]);
+
+  // The render prop the group rows call for each member. Every handler and busy
+  // flag stays exactly as it was before grouping — the row never sees them.
+  const renderWatch = useCallback(
+    (w: Watch): JSX.Element => (
+      <li key={w.id} className={styles.gridItem}>
+        <WatchCard
+          watch={w}
+          onCancel={onCancel}
+          cancelling={cancellingId === w.id}
+          onRemove={onRemove}
+          removing={removingId === w.id}
+          onRename={onRename}
+          renaming={renamingId === w.id}
+        />
+      </li>
+    ),
+    [
+      onCancel,
+      cancellingId,
+      onRemove,
+      removingId,
+      onRename,
+      renamingId,
+    ],
+  );
 
   return (
     <>
@@ -199,6 +326,20 @@ export function DashboardClient(): JSX.Element {
       {state.kind === "ready" ? (
         <>
           <FilterTabs filter={filter} onChange={setFilter} counts={counts} />
+
+          {visibleWatches.length > 0 ? (
+            <GroupToolbar
+              groupBy={prefs.groupBy}
+              sortBy={prefs.sortBy}
+              onGroupBy={onGroupByChange}
+              onSortBy={onSortByChange}
+              onToggleAll={onToggleAll}
+              allExpanded={allExpanded}
+              // With one group there is nothing to expand *all* of — it is
+              // already open by the lone-group rule.
+              showToggleAll={groups.length > 1}
+            />
+          ) : null}
 
           {cancelError ? (
             <div className={styles.banner} role="alert">
@@ -210,21 +351,17 @@ export function DashboardClient(): JSX.Element {
           {visibleWatches.length === 0 ? (
             <EmptyState filter={filter} hasAny={counts.all > 0} />
           ) : (
-            <ul className={styles.grid}>
-              {visibleWatches.map((w) => (
-                <li key={w.id} className={styles.gridItem}>
-                  <WatchCard
-                    watch={w}
-                    onCancel={onCancel}
-                    cancelling={cancellingId === w.id}
-                    onRemove={onRemove}
-                    removing={removingId === w.id}
-                    onRename={onRename}
-                    renaming={renamingId === w.id}
-                  />
-                </li>
+            <div className={styles.groups}>
+              {groups.map((g) => (
+                <WatchGroupCard
+                  key={g.key}
+                  group={g}
+                  expanded={isOpen(g.key)}
+                  onToggle={onToggleGroup}
+                  renderWatch={renderWatch}
+                />
               ))}
-            </ul>
+            </div>
           )}
         </>
       ) : null}
@@ -319,6 +456,104 @@ function FilterTabs({
         );
       })}
     </nav>
+  );
+}
+
+// --- group / sort toolbar ------------------------------------------------
+
+/**
+ * Group-by chips plus a sort control, sitting between the status tabs and the
+ * group list.
+ *
+ * The chips are `aria-pressed` buttons rather than ARIA tabs — there is no
+ * one-panel-per-chip relationship, and `FilterTabs` above already established
+ * that convention. They are styled as outlined pills instead of reusing the
+ * underlined `.tab` look, so two control rows stacked on top of each other stay
+ * visually distinguishable: status is the primary tab row, grouping is a
+ * secondary control.
+ *
+ * The sort control is a native `<select>` with `appearance: none`. Native buys
+ * keyboard, mobile and screen-reader behaviour for free; the repo has no
+ * dropdown component to reuse, and OS-controlled option styling is accepted.
+ */
+function GroupToolbar({
+  groupBy,
+  sortBy,
+  onGroupBy,
+  onSortBy,
+  onToggleAll,
+  allExpanded,
+  showToggleAll,
+}: {
+  groupBy: GroupBy;
+  sortBy: SortBy;
+  onGroupBy: (g: GroupBy) => void;
+  onSortBy: (s: SortBy) => void;
+  onToggleAll: () => void;
+  allExpanded: boolean;
+  showToggleAll: boolean;
+}): JSX.Element {
+  const selectId = useId();
+  const sortOptions = sortOptionsFor(groupBy);
+
+  return (
+    <div className={styles.toolbar}>
+      <div className={styles.toolbarSet} role="group" aria-label="Group watches by">
+        <span className={styles.toolbarLabel}>Group by</span>
+        {GROUP_BY_VALUES.map((g) => {
+          const active = groupBy === g;
+          return (
+            <button
+              key={g}
+              type="button"
+              className={`${styles.chip} ${active ? styles.chipActive : ""}`}
+              aria-pressed={active}
+              onClick={() => onGroupBy(g)}
+            >
+              {GROUP_BY_LABEL[g]}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className={styles.toolbarAside}>
+        <label className={styles.toolbarLabel} htmlFor={selectId}>
+          Sort
+        </label>
+        <span className={styles.selectWrap}>
+          <select
+            id={selectId}
+            className={styles.select}
+            value={sortBy}
+            onChange={(e) => {
+              // Resolve against the offered list rather than casting the raw
+              // value — the options are the only valid inputs.
+              const next = sortOptions.find((s) => s === e.target.value);
+              if (next) onSortBy(next);
+            }}
+          >
+            {sortOptions.map((s) => (
+              <option key={s} value={s}>
+                {SORT_BY_LABEL[s]}
+              </option>
+            ))}
+          </select>
+          <span className={styles.selectChevron} aria-hidden="true">
+            ⌄
+          </span>
+        </span>
+
+        {showToggleAll ? (
+          <button
+            type="button"
+            className={styles.expandBtn}
+            onClick={onToggleAll}
+          >
+            {allExpanded ? "Collapse all" : "Expand all"}
+          </button>
+        ) : null}
+      </div>
+    </div>
   );
 }
 

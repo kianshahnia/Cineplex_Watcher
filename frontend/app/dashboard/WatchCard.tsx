@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { ExperienceBadges } from "@/app/components/ExperienceBadges";
 import { filterExperienceTypes } from "@/lib/experienceTypes";
+import { displayTitle, watchShowtimeIso } from "@/lib/watchGrouping";
 import type { Watch } from "@/lib/api";
 import styles from "./WatchCard.module.css";
 
@@ -66,24 +67,17 @@ export function WatchCard({
   onRename,
   renaming,
 }: Props): JSX.Element {
-  const { showtime, status, name, showtime_at, notify_any_seat, seats, created_at } =
-    watch;
+  const { showtime, status, name, notify_any_seat, seats, created_at } = watch;
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
 
-  // The watch's own name wins (it's the user's personal label); otherwise the
-  // movie title auto-resolved from Cineplex, then a generic placeholder for
-  // showtimes whose metadata couldn't be resolved.
-  const displayName =
-    name?.trim() || showtime.movie_name?.trim() || "Your watched showtime";
+  // Both derivations are imported rather than inlined so this card and the
+  // grouping can never drift on what a watch is called or when it screens —
+  // the group row's label comes from the very same functions.
+  const displayName = displayTitle(watch);
   const theaterName = showtime.theater_name?.trim();
-  // The user's per-watch date wins over the auto-resolved Cineplex metadata —
-  // same precedence as the name. Both preferred values are naive wall clocks;
-  // the aware-UTC `showtime_at` is only a last resort (see lib/api.ts).
-  const showtimeAt = formatShowtime(
-    showtime_at ?? showtime.showtime_local ?? showtime.showtime_at,
-  );
+  const showtimeAt = formatShowtime(watchShowtimeIso(watch));
   // Only decides whether the "details unavailable" fallback still applies —
   // the badges component re-applies the suppression rule itself.
   const hasFormats =

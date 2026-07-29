@@ -1,0 +1,327 @@
+/* One collapsible group row on the watchlist. Deliberately quieter than
+   WatchCard — a row is chrome around cards, so it must never out-shout them. */
+
+.group {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* --- the row ----------------------------------------------------------- */
+
+.row {
+  position: relative;
+  width: 100%;
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 20px;
+  text-align: left;
+  /* Same gradient as .card, flattened — the row is a container, not a card. */
+  background: linear-gradient(
+    180deg,
+    rgba(22, 31, 51, 0.4) 0%,
+    rgba(11, 19, 34, 0.52) 100%
+  );
+  border: 1px solid var(--hair);
+  border-radius: 8px;
+  cursor: pointer;
+  /* The same four shadows .rowStacked uses, at zero spread and transparent, so
+     the stack fades in and out with the panel rather than popping. A list can
+     only interpolate against a list of equal length — `none` would snap. */
+  box-shadow:
+    0 0 0 -1px transparent,
+    0 0 0 0 transparent,
+    0 0 0 -2px transparent,
+    0 0 0 -1px transparent;
+  transition:
+    border-color 200ms ease,
+    background 200ms ease,
+    transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.row:hover {
+  border-color: var(--hair-brass);
+  transform: translateY(-1px);
+}
+
+.row:focus-visible {
+  outline: 1px solid var(--platinum);
+  outline-offset: 2px;
+}
+
+/* A stack of cards hides behind a closed multi-watch row. Pure box-shadow, so
+   there's no extra DOM and no effect on layout: each pair is a solid card face
+   inset by 1px plus the same rect at full size, leaving a 1px hairline edge. */
+.rowStacked {
+  box-shadow:
+    0 4px 0 -1px var(--midnight),
+    0 4px 0 0 var(--hair),
+    0 9px 0 -2px var(--midnight),
+    0 9px 0 -1px var(--hair);
+}
+
+/* The brass top edge already used by .cardActive / .panel, marking a group that
+   still holds a live watch. */
+.groupActive .row::before {
+  content: "";
+  position: absolute;
+  inset: -1px -1px auto -1px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--brass) 38%,
+    var(--brass-soft) 50%,
+    var(--brass) 62%,
+    transparent 100%
+  );
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* --- chevron ----------------------------------------------------------- */
+
+.chevron {
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--silver-dim);
+  /* Same duration and curve as the panel, so the two read as one gesture. */
+  transition:
+    transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 200ms ease;
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
+  color: var(--brass);
+}
+
+.row:hover .chevron {
+  color: var(--platinum);
+}
+
+/* --- label + count ----------------------------------------------------- */
+
+.head {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+  flex-shrink: 0;
+  max-width: 42%;
+}
+
+.label {
+  font-family: var(--font-display);
+  font-weight: 400;
+  /* Deliberately smaller than a WatchCard title so the hierarchy reads. */
+  font-size: clamp(17px, 1.8vw, 21px);
+  line-height: 1.15;
+  letter-spacing: -0.006em;
+  color: var(--mist);
+  font-variation-settings: "opsz" 144;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.count {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--silver-dim);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--hair);
+  background: rgba(214, 219, 228, 0.03);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- facet summary ----------------------------------------------------- */
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.facet {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--silver-dim);
+  white-space: nowrap;
+}
+
+/* Dot separators drawn in CSS so the row stays span-only inside its button. */
+.facet + .facet::before {
+  content: "·";
+  margin-right: 8px;
+  color: var(--hair-strong);
+}
+
+/* A range or a count ("Aug 1 – Aug 3", "3 theatres") stands for several values,
+   so it is lifted a shade to read as a summary rather than a single fact. */
+.facetSpan {
+  color: var(--silver);
+}
+
+/* --- right-hand tags --------------------------------------------------- */
+
+.tail {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+/* Alerts must never hide inside a collapsed row. */
+.notifiedTag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--brass);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--hair-brass);
+  background: rgba(200, 168, 107, 0.06);
+  white-space: nowrap;
+}
+
+.statusPill {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--silver-dim);
+  white-space: nowrap;
+}
+
+.status_live {
+  color: var(--brass);
+}
+
+.status_good {
+  color: var(--brass-soft);
+}
+
+.status_muted {
+  color: var(--silver-deep);
+}
+
+/* --- expanded body ----------------------------------------------------- */
+
+/* The open/close animation rides `grid-template-rows: 0fr → 1fr` on a
+   single-track grid. It is the one way to transition to and from a
+   content-driven height without measuring anything in JS — `height: auto` is
+   not an animatable value, and a `max-height` guess either clips tall groups or
+   eases against a number the content never reaches. */
+.body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.bodyOpen {
+  grid-template-rows: 1fr;
+}
+
+/* `overflow: hidden` + `min-height: 0` are what the 0fr track needs in order to
+   actually clip; without them the row keeps its full height and nothing moves. */
+.bodyInner {
+  min-height: 0;
+  overflow: hidden;
+  /* Held visible for the length of the close, then dropped from the
+     accessibility tree and the tab order. */
+  visibility: hidden;
+  transition: visibility 0s linear 320ms;
+}
+
+.bodyOpen .bodyInner {
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+/* The grid's own one-shot `fadeIn` is cancelled — it is written for a page load
+   and would replay 600ms out of step with the 320ms height on every open. The
+   padding lives here, inside the clipped element, so the spacing collapses with
+   the cards instead of leaving a gap behind a closed row. */
+.bodyInner .bodyGrid {
+  animation: none;
+  padding-top: clamp(16px, 2vw, 22px);
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+/* Slightly behind the height on the way in, so the cards arrive into space that
+   already exists; ahead of it on the way out. */
+.bodyOpen .bodyInner .bodyGrid {
+  opacity: 1;
+  transition: opacity 260ms ease 70ms;
+}
+
+/* --- reduced motion ---------------------------------------------------- */
+
+/* Open and close instantly — the row still clips and still hides its cards from
+   assistive tech, only without the travel. Note the side effect: `transitionend`
+   does not fire for a cancelled transition, so a group closed in this mode keeps
+   its cards mounted until the next open. That is only some idle DOM, and it is
+   what the row did before this animation existed. */
+@media (prefers-reduced-motion: reduce) {
+  .row,
+  .chevron,
+  .body,
+  .bodyInner,
+  .bodyInner .bodyGrid,
+  .bodyOpen .bodyInner .bodyGrid {
+    transition: none;
+  }
+}
+
+/* --- responsive -------------------------------------------------------- */
+
+@media (max-width: 920px) {
+  .head {
+    max-width: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .row {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 10px 12px;
+    padding: 14px 16px;
+  }
+  .chevron {
+    margin-top: 5px;
+  }
+  .head {
+    flex: 1;
+    min-width: 0;
+  }
+  .label {
+    white-space: normal;
+  }
+  .meta {
+    /* Drop below the label, clearing the chevron's column. */
+    flex-basis: 100%;
+    padding-left: 24px;
+  }
+  .tail {
+    margin-left: 0;
+    padding-left: 24px;
+    flex-basis: 100%;
+  }
+}
