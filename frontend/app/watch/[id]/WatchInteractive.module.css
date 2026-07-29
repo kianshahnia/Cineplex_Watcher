@@ -1,18 +1,23 @@
-/* --- seat-map placeholder (a sibling tab loading or failing) -------- */
-/* Sits where the SeatMap would, keeping the card's height from collapsing as
-   the user moves between times. */
+/* --- availability notice (a ticked showtime loading or failing) ------ */
+/* A thin strip above the map, not a replacement for it: the anchor's layout
+   ships with the server render, so seats are always drawn. What can lag is a
+   newly-ticked sibling's availability — and without saying so, a map with no
+   free markers on it reads as "every seat is taken". */
 
 .mapNotice {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
-  min-height: 220px;
-  padding: 24px;
+  gap: 10px;
+  margin-bottom: 4px;
+  padding: 10px 14px;
+  border: 1px solid var(--hair-strong);
+  border-left: 2px solid var(--hair-brass);
+  border-radius: 8px;
+  background: rgba(6, 10, 20, 0.45);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 1.5;
   color: var(--silver);
-  text-align: center;
 }
 
 .mapNoticeTag {
@@ -179,21 +184,25 @@
   gap: 6px;
 }
 
+/* Picked and watching read the same way here as they do on the map: an
+   outlined chip is a pick you haven't saved, a solid brass one is a seat you
+   already watch. Two lists of near-identical gold washes was the thing that
+   made them hard to tell apart. */
 .seatChip {
   font-family: var(--font-mono);
   font-size: 11px;
   letter-spacing: 0.08em;
   padding: 4px 9px;
   border-radius: 3px;
-  background: rgba(200, 168, 107, 0.10);
+  background: transparent;
   color: var(--brass-soft);
-  border: 1px solid var(--hair-brass);
+  border: 1px solid var(--brass);
 }
 
 .seatChipWatched {
-  background: rgba(200, 168, 107, 0.22);
-  color: var(--mist);
-  border-color: var(--brass);
+  background: var(--brass);
+  color: var(--ink);
+  border-color: var(--brass-soft);
 }
 
 .hint {
@@ -658,6 +667,7 @@
 .spinner {
   width: 14px;
   height: 14px;
+  flex-shrink: 0;
   border: 1.5px solid var(--hair-strong);
   border-top-color: var(--brass);
   border-radius: 50%;

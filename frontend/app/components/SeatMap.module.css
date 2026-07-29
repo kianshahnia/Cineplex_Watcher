@@ -95,9 +95,9 @@
   stroke-dasharray: 2 2;
 }
 
-/* Grouped mode: a seat whose status we deliberately aren't stating. Reads as
-   "a seat" — flatter than Available, lighter than Occupied, so it can't be
-   mistaken for either. */
+/* A seat whose status we deliberately aren't stating. Reads as "a seat" —
+   flatter than Available, lighter than Occupied, so it can't be mistaken for
+   either. */
 .neutral {
   fill: rgba(214, 219, 228, 0.13);
   stroke: var(--hair-strong);
@@ -109,6 +109,30 @@
 .freeMark {
   fill: var(--brass);
   pointer-events: none;
+}
+
+/* A live Occupied → Available event landed on this seat: the marker appears,
+   and this pulse is what makes the appearance impossible to miss. The seat
+   itself can't flash here — a neutral map isn't claiming a status. */
+.freeMarkFlash {
+  animation: markPop 2.4s cubic-bezier(0.16, 1, 0.3, 1) 1;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+@keyframes markPop {
+  0% {
+    filter: drop-shadow(0 0 7px rgba(200, 168, 107, 0.85));
+    transform: scale(2.2);
+  }
+  35% {
+    filter: drop-shadow(0 0 4px rgba(200, 168, 107, 0.5));
+    transform: scale(1.4);
+  }
+  100% {
+    filter: none;
+    transform: scale(1);
+  }
 }
 
 .special {
@@ -134,29 +158,35 @@
   stroke-width: 1.25;
 }
 
-.interactive.neutral:hover {
+/* Previews the pick. Excluded on an already-picked seat, where filling it in
+   would read as "more selected" rather than "click to drop this one". */
+.interactive.neutral:not(.selected):hover {
   fill: rgba(200, 168, 107, 0.28);
   stroke: var(--brass);
   stroke-width: 1.5;
 }
 
-/* selected = picked locally, not yet committed */
-.selected.selected {
-  fill: var(--brass-soft);
-  stroke: var(--brass);
-  stroke-width: 1.5;
-  opacity: 1;
+.interactive.selected:hover {
+  fill: rgba(200, 168, 107, 0.14);
 }
 
-.selected.occupied {
-  fill: rgba(200, 168, 107, 0.32);
+/* selected = picked locally, not yet committed. Outline only: an empty seat
+   ringed in brass is unmistakably not the solid-gold "watching" seat, which is
+   the pair that used to be too close to tell apart at a glance. */
+.selected.selected {
+  fill: transparent;
+  stroke: var(--brass);
+  stroke-width: 2;
+  opacity: 1;
 }
 
 .selected.special {
   stroke: var(--brass);
 }
 
-/* watched = already committed to a watch */
+/* watched = already committed to a watch. Solid gold and unmarked: the fill is
+   the whole signal, and it can't be confused with the outlined "picked" seat or
+   the dotted "free" one. */
 .watched.watched {
   fill: var(--brass);
   stroke: var(--brass-soft);
@@ -272,8 +302,8 @@
 }
 
 .chipSelected {
-  background: var(--brass-soft);
-  border: 1px solid var(--brass);
+  background: transparent;
+  border: 2px solid var(--brass);
   box-sizing: border-box;
 }
 

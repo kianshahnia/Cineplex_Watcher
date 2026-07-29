@@ -2,8 +2,8 @@
 
    Chips reuse the app's existing chip vocabulary (mono type, tight radius,
    hairline border). Brass stays the single accent and is spent only on the
-   states that carry information: the time you're viewing, a time that has
-   picks, and the dot marking a time you already watch. */
+   states that carry information: a ticked time, and the dot marking a time you
+   already watch. */
 
 .wrap {
   display: flex;
@@ -44,46 +44,6 @@
   letter-spacing: 0.1em;
   color: var(--silver-dim);
   white-space: nowrap;
-}
-
-/* --- mode toggle ------------------------------------------------------- */
-/* A segmented control rather than a checkbox: the two modes are alternatives,
-   not an on/off, and both need a name for the info panel to refer to. */
-
-.modeSwitch {
-  display: inline-flex;
-  padding: 2px;
-  border: 1px solid var(--hair-strong);
-  border-radius: 6px;
-  background: rgba(6, 10, 20, 0.45);
-  flex-shrink: 0;
-}
-
-.modeBtn {
-  padding: 6px 12px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  cursor: pointer;
-  font-family: var(--font-sans);
-  font-size: 11.5px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  color: var(--silver-dim);
-  white-space: nowrap;
-  transition:
-    background 200ms ease,
-    color 200ms ease;
-}
-
-.modeBtn:hover {
-  color: var(--platinum);
-}
-
-.modeBtnOn,
-.modeBtnOn:hover {
-  background: rgba(214, 219, 228, 0.12);
-  color: var(--mist);
 }
 
 .infoBtn {
@@ -186,8 +146,7 @@
   background: rgba(200, 168, 107, 0.06);
 }
 
-/* The time you're looking at. Filled-but-quiet so it reads as "current tab"
-   rather than "selected option" — the picks badge carries selection. */
+/* A ticked time — one your picks apply to. */
 .chipActive {
   border-color: var(--platinum);
   background: rgba(214, 219, 228, 0.10);
@@ -199,8 +158,6 @@
   background: rgba(214, 219, 228, 0.14);
 }
 
-/* Has uncommitted picks — visible from any tab, so nothing is hidden behind
-   the one you happen to be viewing. */
 .chipPicked {
   border-color: var(--hair-brass);
 }
@@ -209,8 +166,20 @@
   border-color: var(--brass);
 }
 
-/* Grouped mode: the chip is a tick box. An always-present square keeps the row
-   from reflowing as times are ticked and unticked. */
+/* The last ticked time. Still reads as ticked — it just can't be turned off,
+   because the page always has exactly one showtime in play at minimum. */
+.chipLocked {
+  cursor: default;
+}
+
+.chipLocked:hover {
+  border-color: var(--brass);
+  background: rgba(214, 219, 228, 0.14);
+  color: var(--mist);
+}
+
+/* Each chip is a tick box. An always-present square keeps the row from
+   reflowing as times are ticked and unticked. */
 .tick {
   width: 14px;
   height: 14px;
@@ -236,12 +205,6 @@
 
 .time {
   white-space: nowrap;
-}
-
-.count {
-  font-size: 11px;
-  color: var(--brass-soft);
-  letter-spacing: 0.04em;
 }
 
 .watchDot {
@@ -313,9 +276,5 @@
 @media (max-width: 520px) {
   .context {
     display: none;
-  }
-  .modeBtn {
-    padding: 6px 10px;
-    font-size: 11px;
   }
 }

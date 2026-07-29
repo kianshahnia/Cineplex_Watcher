@@ -17,11 +17,13 @@
  * - Touch keeps tap-to-toggle only, so vertical/horizontal scrolling of the map
  *   still works with a finger.
  *
- * Session 4 (grouped mode) adds `statusMode="neutral"`: several showtimes are
- * being edited at once, their availability genuinely differs, so any
+ * `statusMode="neutral"` is what the watch page uses: one map stands in for
+ * every ticked showtime, and their availability genuinely differs, so any
  * Available/Occupied colouring would be a lie for at least one of them. The one
- * exception is `freeAt`, which marks seats already open at *some* ticked
- * showtime — a fact that is true regardless of which one you're looking at.
+ * exception is `freeAt`, which marks seats already open — a fact that holds
+ * regardless of which ticked showtime you have in mind. With a single showtime
+ * ticked that reduces to plain "this seat is free", which is why the copy is
+ * driven by `multiTimes` rather than hard-coded.
  */
 import { useRef, type PointerEvent as ReactPointerEvent } from "react";
 
@@ -89,6 +91,13 @@ interface SeatMapProps {
    * fill already says it.
    */
   freeAt?: ReadonlyMap<string, string[]>;
+  /**
+   * Whether this neutral map stands in for more than one showtime. Only affects
+   * copy: with one time in play "free" needs no qualifier, with several it has
+   * to say *which* — otherwise the marker would claim the seat is open at all
+   * of them.
+   */
+  multiTimes?: boolean;
   /** Set a seat's picked state. Presence of this prop enables selection. */
   onSeatPaint?: (seatId: string, select: boolean) => void;
 }
@@ -117,6 +126,7 @@ export function SeatMap({
   flashIds,
   statusMode = "live",
   freeAt = NO_FREE,
+  multiTimes = false,
   onSeatPaint,
 }: SeatMapProps): JSX.Element {
   const neutral = statusMode === "neutral";
@@ -226,6 +236,7 @@ export function SeatMap({
     flashIds,
     neutral,
     freeAt,
+    multiTimes,
     enabled: Boolean(onSeatPaint),
     onSeatClick: handleSeatClick,
   };
@@ -255,7 +266,9 @@ export function SeatMap({
           role="img"
           aria-label={
             neutral
-              ? `Seat map: ${seatCount} seats, availability not shown because several showtimes are selected. ${freeCount} already open at one of them.`
+              ? multiTimes
+                ? `Seat map: ${seatCount} seats. Availability is not colour-coded because several showtimes are selected; ${freeCount} seats are already open at one of them.`
+                : `Seat map: ${seatCount} seats, ${freeCount} of them already free.`
               : `Seat map: ${availableCount} of ${seatCount} seats available across ${layout.rows.filter((r) => r.seats.length > 0).length} rows`
           }
         >
@@ -282,6 +295,7 @@ export function SeatMap({
         occupied={seatCount - availableCount}
         showWatched={Boolean(watchedIds && watchedIds.size > 0) || Boolean(onSeatPaint)}
         neutral={neutral}
+        multiTimes={multiTimes}
         freeCount={freeCount}
       />
     </div>
@@ -326,9 +340,11 @@ interface SeatInteract {
   selectedIds?: Set<string>;
   watchedIds?: Set<string>;
   flashIds?: Set<string>;
-  /** True when availability colouring is suppressed (grouped mode). */
+  /** True when availability colouring is suppressed. */
   neutral?: boolean;
   freeAt?: ReadonlyMap<string, string[]>;
+  /** True when the neutral map stands in for more than one showtime. */
+  multiTimes?: boolean;
   /** Whether selection is enabled (onSeatPaint was provided). */
   enabled?: boolean;
   onSeatClick?: (seat: SeatDetail) => void;
@@ -403,11 +419,12 @@ function Seat({
 
   const isSelected = interact.selectedIds?.has(seat.id) ?? false;
   const isWatched = interact.watchedIds?.has(seat.id) ?? false;
-  const isFlashing = !neutral && (interact.flashIds?.has(seat.id) ?? false);
+  const justOpened = interact.flashIds?.has(seat.id) ?? false;
+  const isFlashing = !neutral && justOpened;
   const isInteractive = Boolean(interact.enabled) && !isUnknown && !isWatched;
   // Only meaningful in neutral mode: in live mode the fill already says it.
   const freeLabels = neutral ? interact.freeAt?.get(seat.id) : undefined;
-  const isFreeElsewhere = Boolean(freeLabels && freeLabels.length > 0);
+  const isFree = Boolean(freeLabels && freeLabels.length > 0);
 
   // In neutral mode every known seat gets the same fill — the whole point is
   // that we are not claiming a status. Unknown seats keep their dashed outline
@@ -432,11 +449,19 @@ function Seat({
     isInteractive && styles.interactive,
   );
 
+  // With one showtime in play "free" stands alone; with several the marker has
+  // to name which ones, or it would read as "open at all of them".
+  const freeNote = !isFree
+    ? null
+    : interact.multiTimes
+      ? `already free at ${joinLabels(freeLabels ?? [])}`
+      : "free";
+
   const tooltipParts = [
     seat.label,
     neutral ? null : seat.status,
-    isFreeElsewhere && `already free at ${joinLabels(freeLabels ?? [])}`,
-    isFlashing && "just opened",
+    freeNote,
+    (isFlashing || (neutral && justOpened && isFree)) && "just opened",
     isWatched && "already watching",
     isSelected && "selected",
     isSpecial && seat.type,
@@ -464,7 +489,15 @@ function Seat({
     </rect>
   );
 
-  if (!isFreeElsewhere) return rect;
+  // The solid gold fill already says "watching" on its own, and a gold "free"
+  // dot on a gold seat would be invisible anyway — so watched seats carry no
+  // marker. The free-right-now fact survives in the tooltip.
+  if (!isFree || isWatched) return rect;
+
+  const mark = cx(
+    styles.freeMark,
+    neutral && justOpened && styles.freeMarkFlash,
+  );
 
   return (
     <>
@@ -476,7 +509,7 @@ function Seat({
         cx={x + CELL_W / 2}
         cy={y + CELL_H / 2}
         r={2.6}
-        className={styles.freeMark}
+        className={mark}
       />
     </>
   );
@@ -488,6 +521,7 @@ function SeatLegend({
   occupied,
   showWatched,
   neutral,
+  multiTimes,
   freeCount,
 }: {
   total: number;
@@ -495,6 +529,7 @@ function SeatLegend({
   occupied: number;
   showWatched: boolean;
   neutral: boolean;
+  multiTimes: boolean;
   freeCount: number;
 }): JSX.Element {
   return (
@@ -514,7 +549,7 @@ function SeatLegend({
                 className={`${styles.chip} ${styles.chipFree}`}
                 aria-hidden="true"
               />
-              Free at one of these times
+              {multiTimes ? "Free at one of these times" : "Free"}
             </li>
           </>
         ) : (
@@ -552,17 +587,31 @@ function SeatLegend({
           </>
         ) : null}
       </ul>
-      {/* The open/taken tally belongs to one showtime. In neutral mode it would
-          be a number for whichever showtime happened to supply the layout, so
-          it is replaced by the one count that *is* true across the set. */}
+      {/* The tally is counted off `freeAt`, never off the layout's own statuses:
+          in neutral mode the layout is a stand-in and its statuses belong to
+          whichever showtime happened to supply it. With several times ticked an
+          open/taken split would be meaningless, so only the free count is shown;
+          with one, "taken" is exactly the rest of the room. */}
       {neutral ? (
         <div className={styles.tally}>
           <span className={styles.tallyNumber}>{freeCount}</span>
-          <span className={styles.tallyLabel}>
-            {freeCount === 1 ? "seat already free" : "seats already free"}
-          </span>
-          <span className={styles.tallyDot} aria-hidden="true" />
-          <span className={styles.tallyDim}>at one of these times</span>
+          {multiTimes ? (
+            <>
+              <span className={styles.tallyLabel}>
+                {freeCount === 1 ? "seat already free" : "seats already free"}
+              </span>
+              <span className={styles.tallyDot} aria-hidden="true" />
+              <span className={styles.tallyDim}>at one of these times</span>
+            </>
+          ) : (
+            <>
+              <span className={styles.tallySep}>/</span>
+              <span className={styles.tallyTotal}>{total}</span>
+              <span className={styles.tallyLabel}>seats free</span>
+              <span className={styles.tallyDot} aria-hidden="true" />
+              <span className={styles.tallyDim}>{total - freeCount} taken</span>
+            </>
+          )}
         </div>
       ) : (
         <div className={styles.tally}>

@@ -3,14 +3,14 @@
  *
  * The working set is keyed by the **anchor** (the theatre + the showtime whose
  * link the user pasted) and holds every showtime's picks as one blob, so a
- * sign-in round trip restores all of them at once rather than only whichever tab
- * happened to be open. Picks are keyed by Cineplex showtime id, not by our
- * internal UUID, so nothing here needs a showtime's row to have been loaded.
+ * sign-in round trip restores all of them at once rather than only whichever
+ * times were ticked at the moment. Picks are keyed by Cineplex showtime id, not
+ * by our internal UUID, so nothing here needs a showtime's row to have been
+ * loaded.
  *
- * Since Mode B ("same seats for all") landed, the blob also carries the mode and
- * the ticked set — otherwise a signed-out visitor who ticked three showtimes
- * would come back from the magic link to a page that had forgotten which
- * showtimes their picks were meant for.
+ * The blob also carries the ticked set — otherwise a signed-out visitor who
+ * ticked three showtimes would come back from the magic link to a page that had
+ * forgotten which showtimes their picks were meant for.
  *
  * The parse/serialize half is deliberately pure and DOM-free — that is what
  * makes the format migrations verifiable without a browser.
@@ -21,23 +21,14 @@ const STORAGE_PREFIX = "cinewatch.selection.";
 /** Uncommitted seat picks, keyed by Cineplex showtime id. */
 export type SelectionMap = Map<number, Set<string>>;
 
-/**
- * How a seat click applies.
- *
- * - `per-showtime` — the pick lands on the showtime being viewed.
- * - `grouped` — the pick lands on every ticked showtime at once.
- */
-export type SelectionMode = "per-showtime" | "grouped";
-
 export interface WorkingSet {
   selections: SelectionMap;
-  /** Showtimes grouped mode applies to. Meaningless in per-showtime mode. */
+  /** Showtimes every pick applies to. Always holds at least the anchor. */
   ticked: Set<number>;
-  mode: SelectionMode;
 }
 
 export function emptyWorkingSet(): WorkingSet {
-  return { selections: new Map(), ticked: new Set(), mode: "per-showtime" };
+  return { selections: new Map(), ticked: new Set() };
 }
 
 export function selectionStorageKey(
@@ -50,9 +41,9 @@ export function selectionStorageKey(
 /** Stable empty set — shared by every "no picks here" lookup. Never mutate. */
 const NO_SEATS: ReadonlySet<string> = new Set<string>();
 
-// --- grouped-mode selection algebra ---------------------------------------
+// --- selection algebra ----------------------------------------------------
 
-/** Every seat picked at any of `ids` — the shared set grouped mode edits. */
+/** Every seat picked at any of `ids` — the shared set the seat map edits. */
 export function unionPicks(
   selections: SelectionMap,
   ids: Iterable<number>,
@@ -65,14 +56,12 @@ export function unionPicks(
 }
 
 /**
- * The grouped-mode invariant: every ticked showtime holds exactly `seats`, and
+ * The selection invariant: every ticked showtime holds exactly `seats`, and
  * nothing else holds anything.
  *
  * Unticking a time therefore drops its picks — that is what a tick box means,
- * and it keeps the CTA's "N seats across M showtimes" count honest. Entering
- * grouped mode with the union of the per-showtime picks is what makes the
- * round trip lossless: every original pick is present at every ticked time, so
- * switching back leaves nothing behind.
+ * and it keeps the CTA's "N seats across M showtimes" count honest. Ticking a
+ * new time makes it inherit the shared set.
  */
 export function groupedSelections(
   ticked: ReadonlySet<number>,
@@ -137,10 +126,13 @@ export function parseStoredSelections(
 }
 
 /**
- * Read a stored blob. Three shapes are accepted, newest first:
+ * Read a stored blob. Four shapes are accepted, newest first:
  *
- * - `{"v":2,"selections":{…},"ticked":[…],"mode":"grouped"}` — the current form.
- * - `{"576008":[…]}` — Session 3's per-showtime map.
+ * - `{"v":3,"selections":{…},"ticked":[…]}` — the current form.
+ * - `{"v":2,…,"mode":"grouped"}` — same, from when the page had two selection
+ *   modes. The `mode` key is read and discarded; the ticked set it was written
+ *   with is still exactly what the one remaining mode wants.
+ * - `{"576008":[…]}` — Session 3's bare per-showtime map.
  * - `["1_7_4",…]` — the original bare array of the anchor's picks.
  *
  * The wrapper is distinguishable from the bare map because a showtime-id key can
@@ -171,7 +163,6 @@ export function parseStoredWorkingSet(
     return {
       selections: readSelections(obj.selections, anchorId),
       ticked: readIdSet(obj.ticked),
-      mode: obj.mode === "grouped" ? "grouped" : "per-showtime",
     };
   }
 
@@ -182,21 +173,26 @@ export function parseStoredWorkingSet(
 /**
  * Serialize a working set, or `null` when there is nothing worth storing (the
  * caller removes the key rather than writing an empty husk).
+ *
+ * `anchorId` is what makes "nothing worth storing" meaningful: the anchor is
+ * ticked from the moment the page loads, so a blob holding only the anchor and
+ * no picks describes a visitor who has done nothing at all.
  */
-export function serializeWorkingSet(ws: WorkingSet): string | null {
+export function serializeWorkingSet(
+  ws: WorkingSet,
+  anchorId: number,
+): string | null {
   const selections: Record<string, string[]> = {};
   for (const [id, seats] of ws.selections) {
     if (seats.size > 0) selections[String(id)] = [...seats];
   }
   const ticked = [...ws.ticked].sort((a, b) => a - b);
 
-  const empty =
-    Object.keys(selections).length === 0 &&
-    ticked.length === 0 &&
-    ws.mode === "per-showtime";
-  if (empty) return null;
+  const untouched =
+    ticked.length === 0 || (ticked.length === 1 && ticked[0] === anchorId);
+  if (Object.keys(selections).length === 0 && untouched) return null;
 
-  return JSON.stringify({ v: 2, selections, ticked, mode: ws.mode });
+  return JSON.stringify({ v: 3, selections, ticked });
 }
 
 // --- localStorage wrappers -------------------------------------------------
@@ -224,7 +220,7 @@ export function saveWorkingSet(
 ): void {
   if (typeof window === "undefined") return;
   const key = selectionStorageKey(theatreId, anchorId);
-  const payload = serializeWorkingSet(ws);
+  const payload = serializeWorkingSet(ws, anchorId);
   try {
     if (payload === null) {
       window.localStorage.removeItem(key);

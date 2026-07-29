@@ -43,7 +43,6 @@ import {
   saveWorkingSet,
   unionPicks,
   type SelectionMap,
-  type SelectionMode,
 } from "@/lib/watchSelection";
 import styles from "./WatchInteractive.module.css";
 import pageStyles from "./WatchPage.module.css";
@@ -139,27 +138,28 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
   const { theatre_id, showtime_id: anchorId } = initial.showtime;
 
   // --- multi-showtime seat data ------------------------------------------
-  // Lazily filled as the user visits tabs (per-showtime mode) or ticks times
-  // (grouped mode). No batch endpoint: siblings share an identical layout, so a
-  // `…/group` call is the obvious optimization if this ever feels slow — a
-  // handful of calls against a 30/min-per-IP limit is comfortable.
+  // Lazily filled as the user ticks times. No batch endpoint: siblings share an
+  // identical layout, so a `…/group` call is the obvious optimization if this
+  // ever feels slow — a handful of calls against a 30/min-per-IP limit is
+  // comfortable.
   const [seatData, setSeatData] = useState<Map<number, ShowtimeWithSeats>>(
     () => new Map([[anchorId, initial]]),
   );
-  const [viewing, setViewing] = useState<number>(anchorId);
   const [loadingIds, setLoadingIds] = useState<Set<number>>(() => new Set());
   const [loadErrors, setLoadErrors] = useState<Map<number, string>>(
     () => new Map(),
   );
 
-  // --- selection mode -----------------------------------------------------
-  const [mode, setMode] = useState<SelectionMode>("per-showtime");
-  const [ticked, setTicked] = useState<Set<number>>(() => new Set());
-  const [normalizeNotice, setNormalizeNotice] = useState<string | null>(null);
-  const grouped = mode === "grouped";
+  // --- what the picks apply to -------------------------------------------
+  // The pasted showtime starts ticked and nothing else does, so a user who only
+  // wants that one showing never has to touch the switcher. There is no second
+  // mode: a seat click always lands on every ticked time, which with one ticked
+  // is exactly the old single-showtime behaviour.
+  const [ticked, setTicked] = useState<Set<number>>(() => new Set([anchorId]));
+  const [tickNotice, setTickNotice] = useState<string | null>(null);
 
   // Refresh the anchor's entry if the server re-renders the page, without
-  // dropping the sibling tabs the user has already opened.
+  // dropping the siblings the user has already loaded.
   useEffect(() => {
     setSeatData((prev) => {
       const next = new Map(prev);
@@ -168,18 +168,13 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     });
   }, [initial]);
 
-  const viewed = seatData.get(viewing) ?? null;
-  const isAnchorView = viewing === anchorId;
-  // Grouped mode paints one map for several showtimes. Siblings share an
-  // identical layout (that identity is the whole feature), and the anchor's is
-  // the one guaranteed to be loaded, so it is the stand-in.
+  // One map stands in for every ticked showtime. Siblings share an identical
+  // layout (that identity is the whole feature), and the anchor's is the one
+  // guaranteed to be loaded, so it is the stand-in.
   const baseLayout = seatData.get(anchorId)?.layout ?? initial.layout;
 
   // --- sibling showtimes --------------------------------------------------
   const [siblings, setSiblings] = useState<SiblingShowtimes | null>(null);
-  // Distinct from `siblings !== null`: a failed lookup also settles the question
-  // of whether this page has a switcher at all.
-  const [siblingsResolved, setSiblingsResolved] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -190,8 +185,6 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
       } catch {
         // Metadata-class feature: degrade silently. No switcher is exactly what
         // a single-showing film renders, so there is nothing to report.
-      } finally {
-        if (!cancelled) setSiblingsResolved(true);
       }
     })();
     return () => {
@@ -206,16 +199,13 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
   // this project cannot overspend.
   const requestedRef = useRef<Set<number>>(new Set([anchorId]));
 
-  // What needs seat data right now. Deliberately built from `mode` / `ticked` /
-  // `viewing` only — all stable across a pick — so the fetch effect below never
-  // re-runs because a chip's badge changed.
-  const wantedIds = useMemo<number[]>(
-    () => (grouped ? [...ticked] : [viewing]),
-    [grouped, ticked, viewing],
-  );
+  // What needs seat data right now. Deliberately built from `ticked` only —
+  // stable across a pick — so the fetch effect below never re-runs because a
+  // seat was clicked.
+  const wantedIds = useMemo<number[]>(() => [...ticked], [ticked]);
 
-  // Fetch each showtime's seat data the first time it's needed. Grouped mode
-  // asks for every ticked time at once and the markers fill in progressively.
+  // Fetch each showtime's seat data the first time it's needed. Every ticked
+  // time is asked for at once and the markers fill in progressively.
   useEffect(() => {
     const pending = wantedIds.filter((id) => !requestedRef.current.has(id));
     if (pending.length === 0) return;
@@ -271,13 +261,12 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     const stored = loadWorkingSet(theatre_id, anchorId);
     if (stored.selections.size > 0) setSelections(stored.selections);
     if (stored.ticked.size > 0) setTicked(stored.ticked);
-    if (stored.mode === "grouped") setMode("grouped");
   }, [theatre_id, anchorId]);
 
   // persist on every change
   useEffect(() => {
-    saveWorkingSet(theatre_id, anchorId, { selections, ticked, mode });
-  }, [selections, ticked, mode, theatre_id, anchorId]);
+    saveWorkingSet(theatre_id, anchorId, { selections, ticked });
+  }, [selections, ticked, theatre_id, anchorId]);
 
   // Once the sibling set is known, drop picks and ticks for showtimes that are
   // no longer part of it. Cineplex re-schedules, and a stale restored blob would
@@ -308,7 +297,11 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     });
     setTicked((prev) => {
       const out = new Set(prev);
-      return prune(prev, (id) => out.delete(id)) ? out : prev;
+      if (!prune(prev, (id) => out.delete(id))) return prev;
+      // Something always has to be in play; if pruning emptied the set, the
+      // anchor is the one showtime guaranteed to still exist.
+      if (out.size === 0) out.add(anchorId);
+      return out;
     });
   }, [siblings, anchorId]);
 
@@ -425,17 +418,21 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     };
   }, []);
 
-  // The subscription follows the *viewed* showtime: leaving it on the anchor
-  // would paint live updates onto a map the user isn't looking at, and show
-  // none on the one they are. Grouped mode has no live colours to update, so it
-  // holds no socket at all — a flashing seat there would be claiming a status
-  // the map is deliberately not stating.
+  // --- the single-showtime shorthand -------------------------------------
+  // With exactly one time in play the page is unambiguously *about* it, which
+  // is what re-enables the per-showtime affordances: a live socket, the
+  // "already watching" flag, cancel, and the watch-all toggle. With several,
+  // all four would be ambiguous about which showtime they meant.
+  const soleTicked = ticked.size === 1 ? ([...ticked][0] ?? null) : null;
+  const soleData = soleTicked !== null ? seatData.get(soleTicked) : undefined;
+
+  // Only one showtime can be watched live at a time, and only when it is the
+  // only one in play — a flash on a map standing in for four showings would be
+  // claiming a status the map deliberately isn't stating.
   useShowtimeEvents({
-    showtimeUuid: grouped ? null : (viewed?.showtime.id ?? null),
+    showtimeUuid: soleData?.showtime.id ?? null,
     enabled:
-      !grouped &&
-      Boolean(viewed?.showtime.is_active) &&
-      !viewed?.is_post_showtime,
+      Boolean(soleData?.showtime.is_active) && !soleData?.is_post_showtime,
     onEvent: onLiveEvent,
   });
 
@@ -486,17 +483,21 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
 
   const anchorWatch =
     auth.kind === "signed-in" ? (auth.watches.get(anchorId) ?? null) : null;
-  const viewedWatch =
-    auth.kind === "signed-in" ? (auth.watches.get(viewing) ?? null) : null;
+  /** The watch the panel is about — only meaningful with one time ticked. */
+  const scopedWatch =
+    auth.kind === "signed-in" && soleTicked !== null
+      ? (auth.watches.get(soleTicked) ?? null)
+      : null;
 
   const flashIds = useMemo<Set<string>>(() => {
-    const prefix = `${viewing}:`;
+    if (soleTicked === null) return NO_SEATS;
+    const prefix = `${soleTicked}:`;
     const out = new Set<string>();
     for (const key of flashKeys) {
       if (key.startsWith(prefix)) out.add(key.slice(prefix.length));
     }
     return out;
-  }, [flashKeys, viewing]);
+  }, [flashKeys, soleTicked]);
 
   // --- switcher options ---------------------------------------------------
   const switcherOptions = useMemo<SwitcherOption[]>(() => {
@@ -505,7 +506,6 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
       showtime_local:
         initial.showtime.showtime_local ?? siblings?.showtime_local ?? null,
       isAnchor: true,
-      picked: pendingByShowtime.get(anchorId)?.length ?? 0,
       watching: anchorWatch !== null,
       isSoldOut: initial.is_sold_out,
     };
@@ -513,7 +513,6 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
       showtime_id: alt.showtime_id,
       showtime_local: alt.showtime_local,
       isAnchor: false,
-      picked: pendingByShowtime.get(alt.showtime_id)?.length ?? 0,
       watching:
         auth.kind === "signed-in" && auth.watches.has(alt.showtime_id),
       isSoldOut: alt.is_sold_out,
@@ -526,7 +525,7 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
       if (!b.showtime_local) return -1;
       return a.showtime_local.localeCompare(b.showtime_local);
     });
-  }, [anchorId, initial, siblings, pendingByShowtime, anchorWatch, auth]);
+  }, [anchorId, initial, siblings, anchorWatch, auth]);
 
   const timeLabelFor = useCallback(
     (showtimeId: number): string => {
@@ -538,17 +537,9 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
 
   const hasSwitcher = switcherOptions.length > 1;
 
-  // A restored "grouped" mode with no switcher to leave it would be a trap: the
-  // toggle is inside the switcher. Self-correct once the sibling set settles.
-  useEffect(() => {
-    if (siblingsResolved && !hasSwitcher && grouped) {
-      setMode("per-showtime");
-      setNormalizeNotice(null);
-    }
-  }, [siblingsResolved, hasSwitcher, grouped]);
+  // --- seat-map derived data ---------------------------------------------
 
-  // --- grouped-mode derived data -----------------------------------------
-
+  /** `ticked`, in the switcher's chronological order. */
   const tickedIds = useMemo<number[]>(
     () =>
       switcherOptions
@@ -558,18 +549,18 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
   );
 
   /** The shared set every ticked showtime holds. */
-  const groupedSelected = useMemo<Set<string>>(
-    () => (grouped ? unionPicks(selections, ticked) : NO_SEATS),
-    [grouped, selections, ticked],
+  const selectedSeats = useMemo<Set<string>>(
+    () => unionPicks(selections, ticked),
+    [selections, ticked],
   );
 
   /**
-   * Locked seats in grouped mode = committed at **every** ticked showtime. One
-   * that's watched at only some stays selectable, so the user can fill the gaps
-   * (plan §6.3).
+   * Locked seats = committed at **every** ticked showtime. One that's watched at
+   * only some stays selectable, so the user can fill the gaps (plan §6.3). With
+   * a single time ticked this is just that watch's seats.
    */
-  const groupedWatched = useMemo<Set<string>>(() => {
-    if (!grouped || tickedIds.length === 0) return NO_SEATS;
+  const watchedSeats = useMemo<Set<string>>(() => {
+    if (tickedIds.length === 0) return NO_SEATS;
     let acc: Set<string> | null = null;
     for (const id of tickedIds) {
       const watched = watchedByShowtime.get(id) ?? NO_SEATS;
@@ -583,16 +574,16 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
       if (acc.size === 0) break;
     }
     return acc ?? NO_SEATS;
-  }, [grouped, tickedIds, watchedByShowtime]);
+  }, [tickedIds, watchedByShowtime]);
 
   /**
    * Seat id → the ticked times where it is already Available. The one status
    * fact that survives the neutral map, because it is true no matter which
-   * showtime you have in mind. Built only from tabs already fetched, so the
-   * markers appear progressively as the parallel fetches land.
+   * showtime you have in mind — with one time ticked it degrades to plain "this
+   * seat is free". Built only from showtimes already fetched, so the markers
+   * appear progressively as the parallel fetches land.
    */
   const freeAt = useMemo<ReadonlyMap<string, string[]>>(() => {
-    if (!grouped) return NO_FREE;
     const out = new Map<string, string[]>();
     for (const id of tickedIds) {
       const data = seatData.get(id);
@@ -610,36 +601,27 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
         }
       }
     }
-    return out;
-  }, [grouped, tickedIds, seatData, timeLabelFor]);
+    return out.size > 0 ? out : NO_FREE;
+  }, [tickedIds, seatData, timeLabelFor]);
 
   // --- what the action panel shows ---------------------------------------
 
-  const viewedSelection = selections.get(viewing) ?? NO_SEATS;
-  const viewedWatchedIds = watchedByShowtime.get(viewing) ?? NO_SEATS;
-  const viewedPending = useMemo<string[]>(
-    () => pendingByShowtime.get(viewing) ?? [],
-    [pendingByShowtime, viewing],
+  const pendingSeats = useMemo<string[]>(
+    () => [...selectedSeats].filter((id) => !watchedSeats.has(id)),
+    [selectedSeats, watchedSeats],
   );
 
-  const groupedPending = useMemo<string[]>(
-    () => [...groupedSelected].filter((id) => !groupedWatched.has(id)),
-    [groupedSelected, groupedWatched],
+  // Labels are read off the anchor's layout: it is the one always loaded, and
+  // siblings share seat keys by construction (that identity is the feature).
+  const panelPendingLabels = useMemo<string[]>(
+    () => sortLabels(pendingSeats.map((id) => labelFor(anchorId, id))),
+    [pendingSeats, anchorId, labelFor],
   );
 
-  const panelPendingLabels = useMemo<string[]>(() => {
-    const [scope, ids] = grouped
-      ? [anchorId, groupedPending]
-      : [viewing, viewedPending];
-    return sortLabels(ids.map((id) => labelFor(scope, id)));
-  }, [grouped, anchorId, groupedPending, viewing, viewedPending, labelFor]);
-
-  const panelWatchedLabels = useMemo<string[]>(() => {
-    if (grouped) {
-      return sortLabels([...groupedWatched].map((id) => labelFor(anchorId, id)));
-    }
-    return sortLabels(viewedWatch?.seats.map((s) => s.seat_label) ?? []);
-  }, [grouped, groupedWatched, labelFor, anchorId, viewedWatch]);
+  const panelWatchedLabels = useMemo<string[]>(
+    () => sortLabels([...watchedSeats].map((id) => labelFor(anchorId, id))),
+    [watchedSeats, labelFor, anchorId],
+  );
 
   // --- work summary -------------------------------------------------------
   const totalPendingSeats = useMemo<number>(() => {
@@ -648,7 +630,6 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     return total;
   }, [pendingByShowtime]);
 
-  const showtimesWithPicks = pendingByShowtime.size;
   // "Watch all seats" is a create-time flag on a single watch, and the fan-out
   // endpoint carries one shared flag for the whole batch — so it stays scoped to
   // the anchor. Siblings are seat-pick driven.
@@ -669,80 +650,58 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     );
   }, []);
 
-  const viewedIsAll = viewedWatch?.notify_any_seat === true;
+  const scopedIsAll = scopedWatch?.notify_any_seat === true;
 
   // Set one seat's picked state. `select` is decided by the SeatMap: a click
-  // toggles, a drag paints every crossed seat to the same value. In per-showtime
-  // mode the pick lands on the tab being viewed; in grouped mode it lands on
-  // every ticked showtime at once.
+  // toggles, a drag paints every crossed seat to the same value. The pick lands
+  // on every ticked showtime at once — with one ticked that is exactly the
+  // single-showtime behaviour, with several it is the whole point.
   const onPaintSeat = useCallback(
     (seatId: string, select: boolean): void => {
-      if (grouped) {
-        if (ticked.size === 0) return;
-        setSelections((prev) => {
-          const out = new Map(prev);
-          let changed = false;
-          for (const id of ticked) {
-            // Already committed here — nothing to add, and nothing a deselect
-            // could take away (per-seat delete needs a backend endpoint).
-            if ((watchedByShowtime.get(id) ?? NO_SEATS).has(seatId)) continue;
-            const current = out.get(id) ?? NO_SEATS;
-            if (current.has(seatId) === select) continue;
-            const next = new Set(current);
-            if (select) {
-              next.add(seatId);
-            } else {
-              next.delete(seatId);
-            }
-            changed = true;
-            if (next.size === 0) {
-              out.delete(id);
-            } else {
-              out.set(id, next);
-            }
-          }
-          return changed ? out : prev;
-        });
-        setNormalizeNotice(null);
-        clearSubmitNotice();
-        return;
-      }
-
-      if (viewedWatchedIds.has(seatId)) return;
-      // An existing "watch all seats" watch is locked — picking is a no-op.
-      if (viewedIsAll) return;
+      if (ticked.size === 0) return;
+      // An existing "watch all seats" watch covers every seat already, so
+      // picking individual ones is a no-op rather than a contradiction.
+      if (scopedIsAll) return;
       // Picking a specific seat on a new anchor watch exits "watch all" mode;
       // the two are mutually exclusive so the summary stays unambiguous.
-      if (select && isAnchorView && anchorWatchAllWork) setNotifyAnySeat(false);
+      if (select && soleTicked === anchorId && anchorWatchAllWork) {
+        setNotifyAnySeat(false);
+      }
 
       setSelections((prev) => {
-        const current = prev.get(viewing) ?? NO_SEATS;
-        if (current.has(seatId) === select) return prev; // already in target state
-        const next = new Set(current);
-        if (select) {
-          next.add(seatId);
-        } else {
-          next.delete(seatId);
-        }
         const out = new Map(prev);
-        if (next.size === 0) {
-          out.delete(viewing);
-        } else {
-          out.set(viewing, next);
+        let changed = false;
+        for (const id of ticked) {
+          // Already committed here — nothing to add, and nothing a deselect
+          // could take away (per-seat delete needs a backend endpoint).
+          if ((watchedByShowtime.get(id) ?? NO_SEATS).has(seatId)) continue;
+          const current = out.get(id) ?? NO_SEATS;
+          if (current.has(seatId) === select) continue;
+          const next = new Set(current);
+          if (select) {
+            next.add(seatId);
+          } else {
+            next.delete(seatId);
+          }
+          changed = true;
+          if (next.size === 0) {
+            out.delete(id);
+          } else {
+            out.set(id, next);
+          }
         }
-        return out;
+        return changed ? out : prev;
       });
+      setTickNotice(null);
       clearSubmitNotice();
     },
     [
-      grouped,
       ticked,
-      watchedByShowtime,
-      viewedWatchedIds,
-      viewedIsAll,
-      isAnchorView,
+      scopedIsAll,
+      soleTicked,
+      anchorId,
       anchorWatchAllWork,
-      viewing,
+      watchedByShowtime,
       clearSubmitNotice,
     ],
   );
@@ -769,88 +728,51 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
 
   const onClearSelection = useCallback((): void => {
     setSelections((prev) => {
-      const scope = grouped ? [...ticked] : [viewing];
-      if (!scope.some((id) => prev.has(id))) return prev;
+      if (![...ticked].some((id) => prev.has(id))) return prev;
       const out = new Map(prev);
-      for (const id of scope) out.delete(id);
+      for (const id of ticked) out.delete(id);
       return out;
     });
-    setNormalizeNotice(null);
+    setTickNotice(null);
     clearSubmitNotice();
-  }, [grouped, ticked, viewing, clearSubmitNotice]);
-
-  const onView = useCallback(
-    (showtimeId: number): void => {
-      setViewing(showtimeId);
-      clearSubmitNotice();
-    },
-    [clearSubmitNotice],
-  );
+  }, [ticked, clearSubmitNotice]);
 
   /**
-   * Switching to grouped mode **normalizes**: the union of every ticked
-   * showtime's picks becomes the shared set and is applied to all of them. That
-   * is what makes the toggle mean something concrete rather than silently
-   * showing a union that only half-applies — and it makes switching back
-   * lossless, because the per-showtime map now genuinely holds those seats
-   * everywhere.
+   * Add or remove a showtime, keeping the invariant that every ticked showtime
+   * holds exactly the shared set.
+   *
+   * Unticking therefore drops that time's picks — that is what a tick box means,
+   * and it keeps the CTA's count honest. Ticking makes the new time inherit the
+   * shared set, so "watch these seats at the 7 PM too" is one click.
    */
-  const onModeChange = useCallback(
-    (next: SelectionMode): void => {
-      if (next === mode) return;
-      clearSubmitNotice();
-
-      if (next === "grouped") {
-        // Default to every showing in the set. "Same seats for all" taken
-        // literally; the tick boxes are there to narrow it.
-        const ids =
-          ticked.size > 0
-            ? new Set(tickedIds)
-            : new Set(switcherOptions.map((o) => o.showtime_id));
-        const shared = unionPicks(selections, ids);
-        setTicked(ids);
-        setSelections(groupedSelections(ids, shared));
-        setNormalizeNotice(
-          shared.size > 0
-            ? `Applied your ${plural(shared.size, "pick")} to all ${ids.size} times.`
-            : null,
-        );
-        // Picking specific seats and "watch all seats" are mutually exclusive,
-        // and grouped mode is explicitly the former.
-        if (anchorWatch === null) setNotifyAnySeat(false);
-      } else {
-        setNormalizeNotice(null);
-      }
-      setMode(next);
-    },
-    [
-      mode,
-      ticked,
-      tickedIds,
-      switcherOptions,
-      selections,
-      anchorWatch,
-      clearSubmitNotice,
-    ],
-  );
-
-  /** Add or remove a showtime from the grouped batch, keeping the invariant. */
   const onToggleTicked = useCallback(
     (showtimeId: number): void => {
       const next = new Set(ticked);
       if (next.has(showtimeId)) {
+        // Something always has to be in play — the map and the panel have
+        // nothing to be about otherwise. To swap times, tick the new one first.
+        if (next.size === 1) return;
         next.delete(showtimeId);
       } else {
         next.add(showtimeId);
       }
       setTicked(next);
       // The shared set comes from the *previous* ticked set, so unticking the
-      // only showtime that had picks doesn't erase them for the rest.
-      setSelections((prev) => groupedSelections(next, unionPicks(prev, ticked)));
-      setNormalizeNotice(null);
+      // only showtime that happened to carry the picks doesn't erase them for
+      // the rest.
+      const shared = unionPicks(selections, ticked);
+      setSelections(groupedSelections(next, shared));
+      setTickNotice(
+        shared.size > 0 && next.size > ticked.size
+          ? `Your ${plural(shared.size, "pick")} now applies to all ${next.size} times.`
+          : null,
+      );
+      // Picking specific seats and "watch all seats" are mutually exclusive, and
+      // the flag can only ride one watch — so widening the batch drops it.
+      if (next.size > 1 && anchorWatch === null) setNotifyAnySeat(false);
       clearSubmitNotice();
     },
-    [ticked, clearSubmitNotice],
+    [ticked, selections, anchorWatch, clearSubmitNotice],
   );
 
   // --- submission ---------------------------------------------------------
@@ -980,7 +902,7 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
         for (const id of committed) out.delete(id);
         return out;
       });
-      setNormalizeNotice(null);
+      setTickNotice(null);
     }
 
     if (anchorWatchResult) {
@@ -1063,13 +985,13 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     [auth.kind, anchorWatch, anchorId],
   );
 
-  /** Cancels the watch on the showtime currently being viewed. */
+  /** Cancels the watch on the single ticked showtime. */
   const onCancelWatch = useCallback(async (): Promise<void> => {
-    if (auth.kind !== "signed-in" || !viewedWatch) return;
-    const target = viewing;
+    if (auth.kind !== "signed-in" || !scopedWatch || soleTicked === null) return;
+    const target = soleTicked;
     setSubmit({ kind: "submitting" });
     try {
-      await cancelWatch(viewedWatch.id);
+      await cancelWatch(scopedWatch.id);
       setAuth((prev) => {
         if (prev.kind !== "signed-in") return prev;
         const watches = new Map(prev.watches);
@@ -1084,35 +1006,45 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
         message: errorMessage(err, "Couldn't cancel that watch."),
       });
     }
-  }, [auth.kind, viewedWatch, viewing, anchorId]);
+  }, [auth.kind, scopedWatch, soleTicked, anchorId]);
 
   const isSignedIn = auth.kind === "signed-in";
   // "Watch all seats" is anchor-only and create-time-only: the flag can't be
   // PATCHed after creation, and fan-out carries one shared flag for the whole
-  // batch rather than one per target. Grouped mode is a seat-picking mode, so
-  // the choice isn't offered there either.
+  // batch rather than one per target — so it is only offered when the anchor is
+  // the only time in play.
   const allowWatchAll =
-    isSignedIn && !grouped && isAnchorView && anchorWatch === null;
+    isSignedIn && soleTicked === anchorId && anchorWatch === null;
 
-  const viewedLoadError = loadErrors.get(viewing) ?? null;
   const errorIds = useMemo(() => new Set(loadErrors.keys()), [loadErrors]);
 
+  // Ticked showtimes whose availability hasn't landed yet. Worth saying out
+  // loud: until it does the map shows no free markers, which would otherwise
+  // read as "every seat is taken".
+  const pendingLoads = useMemo<number[]>(
+    () => tickedIds.filter((id) => !seatData.has(id)),
+    [tickedIds, seatData],
+  );
+  const failedLoads = useMemo<number[]>(
+    () => tickedIds.filter((id) => loadErrors.has(id)),
+    [tickedIds, loadErrors],
+  );
+
   // What the action panel is configuring: one time, or the whole ticked batch.
-  const panelScope = grouped
-    ? ticked.size > 0
-      ? `${plural(ticked.size, "time")}`
-      : "no times ticked"
-    : hasSwitcher
-      ? timeLabelFor(viewing)
-      : null;
+  const panelScope =
+    soleTicked !== null
+      ? hasSwitcher
+        ? timeLabelFor(soleTicked)
+        : null
+      : plural(ticked.size, "time");
 
   return (
     <>
       {/* The header lives inside this client root (rather than in the server
           page) because the editable title is fed by the anchor's watch, which
           only exists here. Keeps it to one getMe/listWatches round-trip.
-          It stays on the *anchor* even while another tab is being viewed —
-          the pasted showtime is the page's identity. */}
+          It stays on the *anchor* whatever is ticked — the pasted showtime is
+          the page's identity. */}
       <WatchHeader
         data={initial}
         name={isSignedIn ? name || null : null}
@@ -1128,51 +1060,50 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
             initial.showtime.showtime_local ?? siblings?.showtime_local ?? null,
           )}
           options={switcherOptions}
-          mode={mode}
-          onModeChange={onModeChange}
-          viewing={viewing}
-          onView={onView}
           ticked={ticked}
           onToggleTicked={onToggleTicked}
           loadingIds={loadingIds}
           errorIds={errorIds}
-          notice={normalizeNotice}
+          notice={tickNotice}
         />
 
-        {grouped ? (
-          <SeatMap
-            layout={baseLayout}
-            statusMode="neutral"
-            freeAt={freeAt}
-            selectedIds={groupedSelected}
-            watchedIds={groupedWatched}
-            onSeatPaint={ticked.size > 0 ? onPaintSeat : undefined}
-          />
-        ) : viewed ? (
-          <SeatMap
-            layout={viewed.layout}
-            selectedIds={viewedSelection}
-            watchedIds={viewedWatchedIds}
-            flashIds={flashIds}
-            onSeatPaint={onPaintSeat}
-          />
-        ) : viewedLoadError ? (
+        {/* The map itself always renders — the anchor's layout arrives with the
+            server render, so there is never a blank card. What can lag is a
+            newly-ticked sibling's *availability*, which is what these say. */}
+        {failedLoads.length > 0 ? (
           <div className={styles.mapNotice} role="alert">
             <span className={styles.mapNoticeTag}>Unavailable</span>
-            <span>{viewedLoadError}</span>
+            <span>
+              Couldn&rsquo;t load availability for{" "}
+              {failedLoads.map(timeLabelFor).join(", ")}. Seats there aren&rsquo;t
+              marked free — untick and re-tick to retry.
+            </span>
           </div>
-        ) : (
+        ) : pendingLoads.length > 0 ? (
           <div className={styles.mapNotice}>
             <span className={styles.spinner} aria-hidden="true" />
-            <span>Loading the {timeLabelFor(viewing)} seat map…</span>
+            <span>
+              Loading availability for {pendingLoads.map(timeLabelFor).join(", ")}
+              …
+            </span>
           </div>
-        )}
+        ) : null}
+
+        <SeatMap
+          layout={baseLayout}
+          statusMode="neutral"
+          freeAt={freeAt}
+          multiTimes={ticked.size > 1}
+          selectedIds={selectedSeats}
+          watchedIds={watchedSeats}
+          flashIds={flashIds}
+          onSeatPaint={onPaintSeat}
+        />
 
         <ActionPanel
           auth={auth}
-          grouped={grouped}
           tickedCount={ticked.size}
-          viewedWatch={viewedWatch}
+          scopedWatch={scopedWatch}
           panelScope={panelScope}
           allowWatchAll={allowWatchAll}
           watchAll={notifyAnySeat}
@@ -1182,7 +1113,6 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
           pendingCount={panelPendingLabels.length}
           onClearSelection={onClearSelection}
           totalPendingSeats={totalPendingSeats}
-          showtimesWithPicks={showtimesWithPicks}
           canSubmit={canSubmit}
           submit={submit}
           onSubmit={onSubmit}
@@ -1198,9 +1128,8 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
 
 function ActionPanel({
   auth,
-  grouped,
   tickedCount,
-  viewedWatch,
+  scopedWatch,
   panelScope,
   allowWatchAll,
   watchAll,
@@ -1210,7 +1139,6 @@ function ActionPanel({
   pendingCount,
   onClearSelection,
   totalPendingSeats,
-  showtimesWithPicks,
   canSubmit,
   submit,
   onSubmit,
@@ -1218,9 +1146,10 @@ function ActionPanel({
   timeLabelFor,
 }: {
   auth: AuthState;
-  grouped: boolean;
   tickedCount: number;
-  viewedWatch: Watch | null;
+  /** The existing watch on the single ticked showtime — null with several
+   *  ticked, where "which watch?" has no answer. */
+  scopedWatch: Watch | null;
   /** What's being configured — a single time, the ticked batch, or (null) the
    *  only showing this film has. */
   panelScope: string | null;
@@ -1232,29 +1161,25 @@ function ActionPanel({
   pendingCount: number;
   onClearSelection: () => void;
   totalPendingSeats: number;
-  showtimesWithPicks: number;
   canSubmit: boolean;
   submit: SubmitState;
   onSubmit: () => void;
   onCancelWatch: () => void;
   timeLabelFor: (showtimeId: number) => string;
 }): JSX.Element {
-  // "Already watching" / cancel are per-showtime concepts; grouped mode is
-  // configuring several at once, so it defers both to the per-showtime tab.
-  const hasExisting = !grouped && viewedWatch !== null;
-  const existingIsAll = !grouped && viewedWatch?.notify_any_seat === true;
+  // "Already watching" and cancel are per-showtime concepts: with several times
+  // ticked there is no single watch they could refer to, so both wait until the
+  // user narrows back down to one.
+  const single = tickedCount === 1;
+  const hasExisting = single && scopedWatch !== null;
+  const existingIsAll = single && scopedWatch?.notify_any_seat === true;
   const existingIsSpecific = hasExisting && !existingIsAll;
   const isSignedIn = auth.kind === "signed-in";
   const isSubmitting = submit.kind === "submitting";
-  const multi = showtimesWithPicks > 1;
 
   let ctaLabel: string;
-  if (grouped && tickedCount === 0) {
-    ctaLabel = "Tick a time first";
-  } else if (grouped && pendingCount > 0) {
+  if (!single && pendingCount > 0) {
     ctaLabel = `Start watching ${pendingCount} × ${plural(tickedCount, "time")}`;
-  } else if (multi) {
-    ctaLabel = `Start watching ${totalPendingSeats} seats across ${showtimesWithPicks} showtimes`;
   } else if (existingIsAll) {
     ctaLabel = "Watching all seats";
   } else if (existingIsSpecific) {
@@ -1287,59 +1212,8 @@ function ActionPanel({
       <div className={styles.grid}>
         {/* LEFT — what to watch */}
         <div className={styles.selectionCol}>
-          {grouped ? (
-            <>
-              {watchedLabels.length > 0 ? (
-                <div className={styles.watchedBlock}>
-                  <span className={styles.smallLabel}>
-                    Already watching at every ticked time
-                  </span>
-                  <ul className={styles.chipList}>
-                    {watchedLabels.map((label) => (
-                      <li
-                        className={`${styles.seatChip} ${styles.seatChipWatched}`}
-                        key={`w-${label}`}
-                      >
-                        {label}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-              <SelectionSummary
-                count={pendingCount}
-                labels={pendingLabels}
-                onClear={onClearSelection}
-                watchedCount={watchedLabels.length}
-              />
-            </>
-          ) : existingIsAll ? (
+          {existingIsAll ? (
             <AllSeatsBox locked />
-          ) : existingIsSpecific ? (
-            <>
-              {watchedLabels.length > 0 ? (
-                <div className={styles.watchedBlock}>
-                  <span className={styles.smallLabel}>Currently watching</span>
-                  <ul className={styles.chipList}>
-                    {watchedLabels.map((label) => (
-                      <li
-                        className={`${styles.seatChip} ${styles.seatChipWatched}`}
-                        key={`w-${label}`}
-                      >
-                        {label}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-              <SelectionSummary
-                count={pendingCount}
-                labels={pendingLabels}
-                onClear={onClearSelection}
-                addMode
-                watchedCount={watchedLabels.length}
-              />
-            </>
           ) : allowWatchAll ? (
             <>
               <button
@@ -1376,23 +1250,40 @@ function ActionPanel({
               ) : null}
             </>
           ) : (
-            // A sibling tab, or a signed-out visitor previewing picks.
-            <SelectionSummary
-              count={pendingCount}
-              labels={pendingLabels}
-              onClear={onClearSelection}
-            />
+            <>
+              {watchedLabels.length > 0 ? (
+                <div className={styles.watchedBlock}>
+                  <span className={styles.smallLabel}>
+                    {single
+                      ? "Currently watching"
+                      : "Already watching at every ticked time"}
+                  </span>
+                  <ul className={styles.chipList}>
+                    {watchedLabels.map((label) => (
+                      <li
+                        className={`${styles.seatChip} ${styles.seatChipWatched}`}
+                        key={`w-${label}`}
+                      >
+                        {label}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              <SelectionSummary
+                count={pendingCount}
+                labels={pendingLabels}
+                onClear={onClearSelection}
+                addMode={existingIsSpecific}
+                watchedCount={watchedLabels.length}
+              />
+            </>
           )}
 
-          {grouped && pendingCount > 0 ? (
+          {!single && pendingCount > 0 ? (
             <p className={styles.spanNote}>
               {plural(pendingCount, "seat")} × {plural(tickedCount, "time")} ={" "}
               {totalPendingSeats} seat watches. One tap saves them all.
-            </p>
-          ) : !grouped && multi ? (
-            <p className={styles.spanNote}>
-              {totalPendingSeats} seats picked across {showtimesWithPicks}{" "}
-              showtimes. One tap saves them all.
             </p>
           ) : null}
         </div>
