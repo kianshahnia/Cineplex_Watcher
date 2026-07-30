@@ -11,6 +11,12 @@ from app.models.user import User
 from app.schemas.auth import ErrorResponse, MessageResponse
 from app.schemas.watches import (
     AddSeatsRequest,
+    BulkDeleteData,
+    BulkDeleteResponse,
+    BulkRenameData,
+    BulkRenameRequest,
+    BulkRenameResponse,
+    BulkWatchRequest,
     CreateWatchRequest,
     FanoutRequest,
     FanoutResponse,
@@ -121,6 +127,85 @@ async def fanout_watches(
     )
     return FanoutResponse(
         data=FanoutResults(results=[FanoutResult.model_validate(o) for o in outcomes])
+    )
+
+
+@router.post(
+    "/bulk-delete",
+    response_model=BulkDeleteResponse,
+    responses={422: {"model": ErrorResponse}, 429: {"model": ErrorResponse}},
+    summary="Permanently delete several watches at once",
+)
+# Per-user.  One call is one transaction regardless of how many watches it
+# names, so the cost per request is on the same order as the single-watch
+# delete — hence the same 30/min.  ``MAX_BULK_WATCHES`` on the schema is what
+# bounds one call; this bounds the sequence of them.  The frontend routes
+# *every* deletion through here, including a single card's, so a limit tighter
+# than the single-watch endpoint's would be a regression.
+@limiter.limit("30/minute")
+async def bulk_delete_watches(
+    request: Request,
+    body: BulkWatchRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BulkDeleteResponse:
+    """Permanently delete every listed watch you own.
+
+    The bulk counterpart to ``DELETE /watches/{id}/remove``, for the dashboard's
+    multi-select edit mode.  Ids you don't own (or that no longer exist) come
+    back under ``missing`` instead of failing the call — a batch that aborts
+    because one row went stale in another tab helps nobody.  Deletion is
+    permanent: seats and seat events go with the watch, while the
+    ``notifications`` audit log survives with a NULL ``watch_id``.
+    """
+    deleted = await watch_service.bulk_delete_watches(
+        watch_ids=body.watch_ids,
+        user_id=user.id,
+        db=db,
+    )
+    found = set(deleted)
+    return BulkDeleteResponse(
+        data=BulkDeleteData(
+            deleted=deleted,
+            missing=[wid for wid in body.watch_ids if wid not in found],
+        )
+    )
+
+
+@router.post(
+    "/bulk-rename",
+    response_model=BulkRenameResponse,
+    responses={422: {"model": ErrorResponse}, 429: {"model": ErrorResponse}},
+    summary="Apply one name to several watches at once",
+)
+# Per-user; same reasoning as bulk-delete above, and the same limit as the
+# single-watch PATCH it batches.
+@limiter.limit("30/minute")
+async def bulk_rename_watches(
+    request: Request,
+    body: BulkRenameRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> BulkRenameResponse:
+    """Set the same label on every listed watch you own.
+
+    Send ``name: null`` (or an empty string) to clear the label, which drops the
+    cards back to the resolved movie title.  Works on any status, matching
+    ``PATCH /watches/{id}``.  Returns the updated watches so the client can
+    splice them in place rather than refetching the list.
+    """
+    updated = await watch_service.bulk_update_name(
+        watch_ids=body.watch_ids,
+        user_id=user.id,
+        name=body.name,
+        db=db,
+    )
+    found = {w.id for w in updated}
+    return BulkRenameResponse(
+        data=BulkRenameData(
+            updated=[WatchResponse.model_validate(w) for w in updated],
+            missing=[wid for wid in body.watch_ids if wid not in found],
+        )
     )
 
 

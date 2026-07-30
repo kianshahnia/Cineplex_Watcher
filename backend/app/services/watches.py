@@ -383,6 +383,105 @@ async def delete_watch(
 
 
 # ---------------------------------------------------------------------------
+# Bulk operations
+# ---------------------------------------------------------------------------
+
+
+async def bulk_delete_watches(
+    watch_ids: list[uuid.UUID],
+    user_id: uuid.UUID,
+    db: AsyncSession,
+) -> list[uuid.UUID]:
+    """Permanently delete every listed watch the caller owns, in one transaction.
+
+    Returns the ids actually deleted; anything the caller doesn't own (or that
+    no longer exists) is simply absent, and the router reports it as *missing*
+    rather than failing the call.  A bulk gesture that half-succeeds because one
+    id went stale in another tab would be worse than useless.
+
+    **Deletes with a Core statement, not ``session.delete`` per row.**
+    :func:`delete_watch` has to eager-load the whole ``watched_seats →
+    seat_events`` tree because the ORM relationships use
+    ``cascade="all, delete-orphan"`` without ``passive_deletes``.  At 200
+    watches that is potentially tens of thousands of rows pulled into memory to
+    delete them one by one.  A Core ``DELETE`` bypasses the unit of work
+    entirely and lets the ``ON DELETE CASCADE`` foreign keys do the work in the
+    database — the same reasoning as the bulk seat clear in
+    :func:`create_watch`.  ``notifications.watch_id`` is ``ON DELETE SET NULL``,
+    so the audit log survives, which is the whole point of that column.
+    """
+    if not watch_ids:
+        return []
+
+    # Ownership filter lives in the WHERE clause: a watch belonging to someone
+    # else is never selected, so it can never be deleted, and the caller learns
+    # nothing about whether the id exists.
+    id_stmt = select(Watch.id).where(
+        Watch.id.in_(watch_ids),
+        Watch.user_id == user_id,
+    )
+    result = await db.execute(id_stmt)
+    found: list[uuid.UUID] = [row[0] for row in result.all()]
+
+    if found:
+        await db.execute(delete(Watch).where(Watch.id.in_(found)))
+        await db.commit()
+
+    await log.ainfo(
+        "watches_bulk_deleted",
+        user_id=str(user_id),
+        requested=len(watch_ids),
+        deleted=len(found),
+    )
+    return found
+
+
+async def bulk_update_name(
+    watch_ids: list[uuid.UUID],
+    user_id: uuid.UUID,
+    name: str | None,
+    db: AsyncSession,
+) -> list[Watch]:
+    """Apply one label to every listed watch the caller owns.
+
+    Any status is fair game, matching :func:`update_watch` — relabelling a batch
+    of finished watches in history is a legitimate thing to want.  ``name=None``
+    clears the label, so the cards fall back to the resolved movie title.
+
+    Returns the updated rows with their relationships loaded, ready to serialize,
+    so the dashboard can splice them in place instead of refetching the list.
+    """
+    if not watch_ids:
+        return []
+
+    stmt = (
+        select(Watch)
+        .where(Watch.id.in_(watch_ids), Watch.user_id == user_id)
+        .options(
+            selectinload(Watch.watched_seats),
+            selectinload(Watch.showtime),
+        )
+        .order_by(Watch.created_at.desc())
+        .execution_options(populate_existing=True)
+    )
+    result = await db.execute(stmt)
+    watches = list(result.scalars().all())
+
+    for watch in watches:
+        watch.name = name
+    if watches:
+        await db.commit()
+
+    await log.ainfo(
+        "watches_bulk_renamed",
+        user_id=str(user_id),
+        requested=len(watch_ids),
+        updated=len(watches),
+    )
+    return watches
+
+
+# ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
 

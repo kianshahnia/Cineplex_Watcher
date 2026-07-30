@@ -128,6 +128,76 @@ class AddSeatsRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Bulk operations — the dashboard's multi-select edit mode
+# ---------------------------------------------------------------------------
+
+#: Hard cap on how many watches one bulk call may touch.
+#:
+#: Unlike ``MAX_FANOUT_TARGETS`` this is not about upstream volume — a bulk call
+#: never touches Cineplex.  It bounds the size of a single transaction, and it is
+#: what makes the per-user rate limit meaningful: without a cap, "select all"
+#: on a pathological account would be one unbounded statement.  200 comfortably
+#: covers clearing a full dashboard in one gesture.
+MAX_BULK_WATCHES = 200
+
+
+class BulkWatchRequest(BaseModel):
+    """Base for the bulk endpoints: the watches to act on.
+
+    Duplicate ids are **deduplicated rather than rejected** (unlike
+    ``FanoutRequest.targets``).  A fan-out target repeated twice would be applied
+    twice and misreported; here the operations are set-shaped — deleting or
+    renaming the same watch twice is the same as doing it once — so a duplicate
+    is a harmless client quirk, not an ambiguity worth a 422.
+    """
+
+    watch_ids: list[uuid.UUID] = Field(min_length=1, max_length=MAX_BULK_WATCHES)
+
+    @field_validator("watch_ids")
+    @classmethod
+    def _dedupe(cls, value: list[uuid.UUID]) -> list[uuid.UUID]:
+        seen: set[uuid.UUID] = set()
+        out: list[uuid.UUID] = []
+        for wid in value:
+            if wid not in seen:
+                seen.add(wid)
+                out.append(wid)
+        return out
+
+
+class BulkRenameRequest(BulkWatchRequest):
+    """Apply **one** label to every listed watch.
+
+    ``null`` (or a blank string, via ``_clean_name``) clears the label, so the
+    cards fall back to the resolved movie title.
+    """
+
+    name: str | None = Field(default=None, max_length=_NAME_MAX_LEN)
+
+    _clean_name = field_validator("name")(_clean_name)
+
+
+class BulkDeleteData(BaseModel):
+    """Which ids the delete actually consumed.
+
+    ``missing`` covers both "no such watch" and "not yours" — deliberately not
+    distinguished, unlike the 404/403 split on the single-watch endpoints, so a
+    bulk call can't be used to probe whether an id belongs to someone else.
+    Either way the client's answer is the same: it is not on your dashboard.
+    """
+
+    deleted: list[uuid.UUID]
+    missing: list[uuid.UUID]
+
+
+class BulkRenameData(BaseModel):
+    #: The watches as they now stand, so the client can splice them in place
+    #: rather than refetching the whole list.
+    updated: list[WatchResponse]
+    missing: list[uuid.UUID]
+
+
+# ---------------------------------------------------------------------------
 # Fan-out — apply a selection across a film's other showings
 # ---------------------------------------------------------------------------
 
@@ -219,6 +289,16 @@ class WatchDetailResponse(BaseModel):
 
 class WatchListResponse(BaseModel):
     data: list[WatchResponse]
+    error: None = None
+
+
+class BulkDeleteResponse(BaseModel):
+    data: BulkDeleteData
+    error: None = None
+
+
+class BulkRenameResponse(BaseModel):
+    data: BulkRenameData
     error: None = None
 
 
