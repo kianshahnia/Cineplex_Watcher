@@ -44,73 +44,83 @@
   pointer-events: none;
 }
 
-/* dim non-active cards subtly so the active ones lead the eye */
-.card[data-status="cancelled"],
-.card[data-status="expired"] {
-  opacity: 0.78;
+/* Wash out everything that isn't active, so the two tabs stay tellable apart at
+   a glance and the active cards lead the eye.
+   Written as :not(active) rather than listing the inactive statuses, so it can't
+   go stale as statuses come and go — and it is now the ONLY status signal on a
+   card, since the pill was removed (docs/bugs.md #14). Hence the desaturate as
+   well as the fade: it drains the brass out of the seat chips and the notified
+   tag, which opacity alone leaves colourful. Hover restores both, so a card you
+   are actually reading is never dimmed. */
+.card:not([data-status="active"]) {
+  opacity: 0.62;
+  filter: saturate(0.4);
 }
 
-.card[data-status="cancelled"]:hover,
-.card[data-status="expired"]:hover {
+.card:not([data-status="active"]):hover {
   opacity: 1;
+  filter: none;
 }
 
 /* --- top row ---------------------------------------------------------- */
 
+/* Holds the edit-mode checkbox, and only renders in edit mode — the status pill
+   that used to share it is gone. */
 .topRow {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  justify-content: flex-start;
+  gap: 12px;
 }
 
-.statusPill {
+/* --- selection (edit mode) -------------------------------------------- */
+
+.selectBox {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  padding: 5px 12px 5px 10px;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
   border: 1px solid var(--hair-strong);
-  border-radius: 999px;
-  font-family: var(--font-sans);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--platinum);
-  background: rgba(214, 219, 228, 0.025);
+  background: rgba(11, 19, 34, 0.55);
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    background 180ms ease;
 }
 
-.statusDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--silver);
-}
-
-.status_live {
-  color: var(--mist);
+.selectBox:hover {
   border-color: var(--hair-brass);
-  background: rgba(200, 168, 107, 0.08);
 }
-.status_live .statusDot {
+
+.selectBox:focus-visible {
+  outline: none;
+  border-color: var(--platinum);
+}
+
+.selectBoxOn {
+  border-color: var(--brass);
   background: var(--brass);
-  animation: liveDot 2.6s ease-out infinite;
 }
 
-.status_good {
-  color: var(--brass-soft);
+/* Wins over the .card:not([data-status="active"]) wash above — equal specificity
+   (one class + one attribute either way), so this has to stay later in the file.
+   A card you have deliberately ticked must never look like the greyed-out ones
+   around it. */
+.card.cardSelected {
+  opacity: 1;
+  filter: none;
   border-color: var(--hair-brass);
-  background: rgba(200, 168, 107, 0.05);
-}
-.status_good .statusDot {
-  background: var(--brass-soft);
-}
-
-.status_muted {
-  color: var(--silver-dim);
-}
-.status_muted .statusDot {
-  background: var(--silver-deep);
+  background: linear-gradient(
+    180deg,
+    rgba(200, 168, 107, 0.07) 0%,
+    rgba(11, 19, 34, 0.65) 100%
+  );
 }
 
 /* --- title + meta ----------------------------------------------------- */
@@ -352,6 +362,31 @@
   background: rgba(200, 168, 107, 0.06);
 }
 
+.seatsTags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* The adjacent-seat alert rule, beside the seat count it qualifies.
+   Deliberately *not* brass like .notifiedTag: brass on this card means an alert
+   has fired, and this is a setting, not an event. Silver keeps it legible as
+   configuration and stops two pills competing when both are present. */
+.blockTag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--silver);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--hair-strong);
+  background: rgba(255, 255, 255, 0.03);
+  white-space: nowrap;
+}
+
 .chipList {
   list-style: none;
   margin: 0;
@@ -458,6 +493,9 @@
   }
 }
 
+/* The card's one destructive action — a permanent delete, on every status.
+   Quiet at rest, red on hover; it asks for no confirmation, so the hover state
+   is the only warning there is. */
 .cancelBtn {
   display: inline-flex;
   align-items: center;
@@ -481,41 +519,10 @@
 .cancelBtn:hover:not(:disabled) {
   color: #d97676;
   border-color: rgba(217, 118, 118, 0.45);
-}
-
-.cancelBtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.removeBtn {
-  display: inline-flex;
-  align-items: center;
-  height: 38px;
-  padding: 0 14px;
-  background: transparent;
-  color: var(--silver-deep);
-  border: 1px solid transparent;
-  border-radius: 5px;
-  font-family: var(--font-sans);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition:
-    color 200ms ease,
-    border-color 200ms ease,
-    background 200ms ease;
-}
-
-.removeBtn:hover:not(:disabled) {
-  color: #d97676;
-  border-color: rgba(217, 118, 118, 0.45);
   background: rgba(216, 102, 102, 0.06);
 }
 
-.removeBtn:disabled {
+.cancelBtn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

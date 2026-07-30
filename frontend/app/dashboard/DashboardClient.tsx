@@ -5,13 +5,14 @@ import { useCallback, useEffect, useId, useMemo, useState } from "react";
 
 import {
   ApiError,
-  cancelWatch,
+  MAX_BULK_WATCHES,
+  deleteWatches,
   getMe,
   listWatches,
-  removeWatch,
+  renameWatches,
   updateWatch,
 } from "@/lib/api";
-import type { CurrentUser, Watch, WatchStatus } from "@/lib/api";
+import type { CurrentUser, Watch } from "@/lib/api";
 import {
   MAX_REMEMBERED_EXPANDED,
   defaultPrefs,
@@ -20,6 +21,7 @@ import {
   savePrefs,
 } from "@/lib/dashboardPrefs";
 import type { DashboardPrefs } from "@/lib/dashboardPrefs";
+import { chunkIds, selectStateOf, toggleGroup, toggleOne } from "@/lib/bulkSelection";
 import {
   GROUP_BY_VALUES,
   groupWatches,
@@ -36,13 +38,27 @@ type LoadState =
   | { kind: "error"; message: string }
   | { kind: "ready"; user: CurrentUser; watches: Watch[] };
 
-type FilterKey = "all" | WatchStatus;
+/**
+ * Two tabs, and "expired" means **everything that isn't active** — not the
+ * literal `expired` status (docs/bugs.md #15).
+ *
+ * That distinction is load-bearing. `cancelled` rows still exist from before
+ * bugs.md #8 made deletion permanent, and the poller retires a fully-delivered
+ * watch by status. Filtering on status equality would leave those rows in the
+ * database, owned by the user, and reachable from no tab at all — so there'd be
+ * no way to see or delete them. A predicate can't develop that hole as statuses
+ * come and go.
+ */
+type FilterKey = "active" | "expired";
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "active", label: "Active" },
   { key: "expired", label: "Expired" },
-  { key: "all", label: "All" },
 ];
+
+function matchesFilter(w: Watch, filter: FilterKey): boolean {
+  return filter === "active" ? w.status === "active" : w.status !== "active";
+}
 
 const GROUP_BY_LABEL: Record<GroupBy, string> = {
   movie: "Movie",
@@ -60,13 +76,26 @@ const SORT_BY_LABEL: Record<SortBy, string> = {
   theatre: "Theatre",
 };
 
+function messageOf(err: unknown, fallback: string): string {
+  if (err instanceof ApiError) return err.message;
+  if (err instanceof Error) return err.message;
+  return fallback;
+}
+
 export function DashboardClient(): JSX.Element {
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [filter, setFilter] = useState<FilterKey>("active");
-  const [cancellingId, setCancellingId] = useState<string | null>(null);
-  const [cancelError, setCancelError] = useState<string | null>(null);
-  const [removingId, setRemovingId] = useState<string | null>(null);
+  // A set, not a single id: deleting no longer asks for confirmation, so users
+  // click through several cards fast and a single-flight guard would silently
+  // swallow every click after the first.
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(() => new Set());
+  const [actionError, setActionError] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  // --- edit mode ---------------------------------------------------------
+  const [editing, setEditing] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [bulkName, setBulkName] = useState("");
+  const [bulkBusy, setBulkBusy] = useState<"delete" | "rename" | null>(null);
   // How the list is grouped and sorted, and which rows are open. Persisted to
   // localStorage — see the hydration pair below.
   const [prefs, setPrefs] = useState<DashboardPrefs>(defaultPrefs);
@@ -114,78 +143,56 @@ export function DashboardClient(): JSX.Element {
     savePrefs(prefs);
   }, [hydrated, prefs]);
 
-  const onCancel = useCallback(
-    async (watch: Watch): Promise<void> => {
-      if (cancellingId) return;
-      setCancelError(null);
-      setCancellingId(watch.id);
-      try {
-        const updated = await cancelWatch(watch.id);
-        setState((prev) => {
-          if (prev.kind !== "ready") return prev;
-          return {
-            ...prev,
-            watches: prev.watches.map((w) =>
-              w.id === updated.id ? updated : w,
-            ),
-          };
-        });
-      } catch (err) {
-        const message =
-          err instanceof ApiError
-            ? err.message
-            : err instanceof Error
-              ? err.message
-              : "Couldn’t cancel that watch.";
-        setCancelError(message);
-      } finally {
-        setCancellingId(null);
-      }
-    },
-    [cancellingId],
-  );
+  /** Drop watches from local state — used by both the single and bulk paths. */
+  const forget = useCallback((ids: readonly string[]): void => {
+    if (ids.length === 0) return;
+    const gone = new Set(ids);
+    setState((prev) =>
+      prev.kind === "ready"
+        ? { ...prev, watches: prev.watches.filter((w) => !gone.has(w.id)) }
+        : prev,
+    );
+    setSelectedIds((prev) => {
+      if (![...gone].some((id) => prev.has(id))) return prev;
+      const next = new Set(prev);
+      for (const id of gone) next.delete(id);
+      return next;
+    });
+  }, []);
 
-  const onRemove = useCallback(
+  /**
+   * Delete one watch, permanently and without a confirmation.
+   *
+   * Cancel and Remove used to be two buttons — a soft archive and a hard
+   * delete — which was a distinction nobody wanted. There is one now, and it
+   * goes through the same bulk endpoint the edit bar uses, so "delete watches"
+   * has exactly one implementation.
+   */
+  const onDelete = useCallback(
     async (watch: Watch): Promise<void> => {
-      if (removingId) return;
-      if (
-        typeof window !== "undefined" &&
-        !window.confirm(
-          "Remove this watch permanently? This can’t be undone.",
-        )
-      ) {
-        return;
-      }
-      setCancelError(null);
-      setRemovingId(watch.id);
+      if (deletingIds.has(watch.id)) return;
+      setActionError(null);
+      setDeletingIds((prev) => new Set(prev).add(watch.id));
       try {
-        await removeWatch(watch.id);
-        // Drop it from the local list — no re-fetch needed.
-        setState((prev) => {
-          if (prev.kind !== "ready") return prev;
-          return {
-            ...prev,
-            watches: prev.watches.filter((w) => w.id !== watch.id),
-          };
-        });
+        await deleteWatches([watch.id]);
+        forget([watch.id]);
       } catch (err) {
-        const message =
-          err instanceof ApiError
-            ? err.message
-            : err instanceof Error
-              ? err.message
-              : "Couldn’t remove that watch.";
-        setCancelError(message);
+        setActionError(messageOf(err, "Couldn’t remove that watch."));
       } finally {
-        setRemovingId(null);
+        setDeletingIds((prev) => {
+          if (!prev.has(watch.id)) return prev;
+          const next = new Set(prev);
+          next.delete(watch.id);
+          return next;
+        });
       }
     },
-    [removingId],
+    [deletingIds, forget],
   );
 
   const onRename = useCallback(
     async (watch: Watch, name: string | null): Promise<void> => {
-      setCancelError(null);
+      setActionError(null);
       setRenamingId(watch.id);
       try {
         const updated = await updateWatch(watch.id, { name });
@@ -199,13 +206,7 @@ export function DashboardClient(): JSX.Element {
           };
         });
       } catch (err) {
-        const message =
-          err instanceof ApiError
-            ? err.message
-            : err instanceof Error
-              ? err.message
-              : "Couldn’t rename that watch.";
-        setCancelError(message);
+        setActionError(messageOf(err, "Couldn’t rename that watch."));
         // Re-throw so the card keeps its inline editor open for a retry.
         throw err;
       } finally {
@@ -215,16 +216,16 @@ export function DashboardClient(): JSX.Element {
     [],
   );
 
-  const counts = useMemo(() => {
-    if (state.kind !== "ready") {
-      return { all: 0, active: 0, fulfilled: 0, cancelled: 0, expired: 0 };
-    }
-    const init = { all: 0, active: 0, fulfilled: 0, cancelled: 0, expired: 0 };
-    for (const w of state.watches) {
-      init.all += 1;
-      init[w.status] += 1;
-    }
-    return init;
+  // One tally per tab plus the total, computed from the full list so both tab
+  // counts are right whichever tab is open.
+  const counts = useMemo<Record<FilterKey, number> & { total: number }>(() => {
+    if (state.kind !== "ready") return { active: 0, expired: 0, total: 0 };
+    const active = state.watches.filter((w) => w.status === "active").length;
+    return {
+      active,
+      expired: state.watches.length - active,
+      total: state.watches.length,
+    };
   }, [state]);
 
   // Status filtering only — ordering now belongs to `groupWatches`, which sorts
@@ -232,15 +233,123 @@ export function DashboardClient(): JSX.Element {
   // here could not influence the result anyway.
   const visibleWatches = useMemo<Watch[]>(() => {
     if (state.kind !== "ready") return [];
-    return filter === "all"
-      ? state.watches
-      : state.watches.filter((w) => w.status === filter);
+    return state.watches.filter((w) => matchesFilter(w, filter));
   }, [state, filter]);
 
   const groups = useMemo(
     () => groupWatches(visibleWatches, prefs.groupBy, prefs.sortBy),
     [visibleWatches, prefs.groupBy, prefs.sortBy],
   );
+
+  // --- multi-select ------------------------------------------------------
+
+  // Switching tabs hides cards, and acting on something you can't see is how a
+  // bulk delete becomes a horror story. Grouping/sorting changes are safe by
+  // contrast — they rearrange the same cards — so they don't clear anything.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [filter]);
+
+  /** Selection intersected with what's on screen — the only thing acted on. */
+  const selectedWatches = useMemo<Watch[]>(
+    () => visibleWatches.filter((w) => selectedIds.has(w.id)),
+    [visibleWatches, selectedIds],
+  );
+
+  const onToggleSelect = useCallback((watch: Watch): void => {
+    setSelectedIds((prev) => toggleOne(prev, watch.id));
+  }, []);
+
+  /** All-or-nothing for one group: partly-selected ticks the rest. */
+  const onToggleGroupSelect = useCallback((watches: readonly Watch[]): void => {
+    setSelectedIds((prev) => toggleGroup(prev, watches));
+  }, []);
+
+  const onSelectAll = useCallback((): void => {
+    setSelectedIds(new Set(visibleWatches.map((w) => w.id)));
+  }, [visibleWatches]);
+
+  const onClearSelection = useCallback((): void => {
+    setSelectedIds(new Set());
+  }, []);
+
+  const onToggleEditing = useCallback((): void => {
+    setEditing((prev) => {
+      if (prev) {
+        setSelectedIds(new Set());
+        setBulkName("");
+      }
+      return !prev;
+    });
+  }, []);
+
+  /**
+   * Delete every selected watch.
+   *
+   * Confirms only for a batch: the single-card path is instant (that friction
+   * is the thing being removed), but a bulk delete is unbounded and there is
+   * no undo — the rows are gone from the database, seats and all.
+   */
+  const onBulkDelete = useCallback(async (): Promise<void> => {
+    const ids = selectedWatches.map((w) => w.id);
+    if (ids.length === 0 || bulkBusy) return;
+    if (
+      ids.length > 1 &&
+      typeof window !== "undefined" &&
+      !window.confirm(
+        `Delete ${ids.length} watches permanently? This can’t be undone.`,
+      )
+    ) {
+      return;
+    }
+    setActionError(null);
+    setBulkBusy("delete");
+    // Applied even if a later chunk fails, so the list never claims a watch
+    // still exists when it doesn't. `missing` ids are gone either way.
+    const removed: string[] = [];
+    try {
+      for (const part of chunkIds(ids, MAX_BULK_WATCHES)) {
+        await deleteWatches(part);
+        removed.push(...part);
+      }
+    } catch (err) {
+      setActionError(messageOf(err, "Couldn’t remove those watches."));
+    } finally {
+      forget(removed);
+      setBulkBusy(null);
+    }
+  }, [selectedWatches, bulkBusy, forget]);
+
+  /** Apply one label to every selected watch. Blank clears it. */
+  const onBulkRename = useCallback(async (): Promise<void> => {
+    const ids = selectedWatches.map((w) => w.id);
+    if (ids.length === 0 || bulkBusy) return;
+    setActionError(null);
+    setBulkBusy("rename");
+    const name = bulkName.trim() || null;
+    const updated: Watch[] = [];
+    try {
+      for (const part of chunkIds(ids, MAX_BULK_WATCHES)) {
+        const result = await renameWatches(part, name);
+        updated.push(...result.updated);
+      }
+    } catch (err) {
+      setActionError(messageOf(err, "Couldn’t rename those watches."));
+    } finally {
+      if (updated.length > 0) {
+        const byId = new Map(updated.map((w) => [w.id, w]));
+        setState((prev) =>
+          prev.kind === "ready"
+            ? {
+                ...prev,
+                watches: prev.watches.map((w) => byId.get(w.id) ?? w),
+              }
+            : prev,
+        );
+      }
+      setBulkBusy(null);
+    }
+  }, [selectedWatches, bulkBusy, bulkName]);
 
   const expandedSet = useMemo(
     () => new Set(prefs.expanded),
@@ -300,22 +409,24 @@ export function DashboardClient(): JSX.Element {
       <li key={w.id} className={styles.gridItem}>
         <WatchCard
           watch={w}
-          onCancel={onCancel}
-          cancelling={cancellingId === w.id}
-          onRemove={onRemove}
-          removing={removingId === w.id}
+          onDelete={onDelete}
+          deleting={deletingIds.has(w.id)}
           onRename={onRename}
           renaming={renamingId === w.id}
+          selectable={editing}
+          selected={selectedIds.has(w.id)}
+          onToggleSelect={onToggleSelect}
         />
       </li>
     ),
     [
-      onCancel,
-      cancellingId,
-      onRemove,
-      removingId,
+      onDelete,
+      deletingIds,
       onRename,
       renamingId,
+      editing,
+      selectedIds,
+      onToggleSelect,
     ],
   );
 
@@ -327,29 +438,58 @@ export function DashboardClient(): JSX.Element {
         <>
           <FilterTabs filter={filter} onChange={setFilter} counts={counts} />
 
+          {/* Toolbar and bulk bar share one flex item so that the bar
+              collapsing to zero height doesn't leave `.main`'s 32-48px gap
+              behind it. The bar belongs to the toolbar anyway. */}
           {visibleWatches.length > 0 ? (
-            <GroupToolbar
-              groupBy={prefs.groupBy}
-              sortBy={prefs.sortBy}
-              onGroupBy={onGroupByChange}
-              onSortBy={onSortByChange}
-              onToggleAll={onToggleAll}
-              allExpanded={allExpanded}
-              // With one group there is nothing to expand *all* of — it is
-              // already open by the lone-group rule.
-              showToggleAll={groups.length > 1}
-            />
+            <div className={styles.toolbarStack}>
+              <GroupToolbar
+                groupBy={prefs.groupBy}
+                sortBy={prefs.sortBy}
+                onGroupBy={onGroupByChange}
+                onSortBy={onSortByChange}
+                onToggleAll={onToggleAll}
+                allExpanded={allExpanded}
+                // With one group there is nothing to expand *all* of — it is
+                // already open by the lone-group rule.
+                showToggleAll={groups.length > 1}
+                editing={editing}
+                onToggleEditing={onToggleEditing}
+              />
+
+              {/* Always rendered, so the height has something to ease between —
+                  the same 0fr → 1fr grid trick the group rows use. `.bulkWrapInner`
+                  takes it out of the tab order once closed. */}
+              <div
+                className={`${styles.bulkWrap} ${editing ? styles.bulkWrapOpen : ""}`}
+              >
+                <div className={styles.bulkWrapInner}>
+                  <BulkBar
+                    selectedCount={selectedWatches.length}
+                    visibleCount={visibleWatches.length}
+                    name={bulkName}
+                    onNameChange={setBulkName}
+                    onSelectAll={onSelectAll}
+                    onClear={onClearSelection}
+                    onRename={() => void onBulkRename()}
+                    onDelete={() => void onBulkDelete()}
+                    busy={bulkBusy}
+                    onDone={onToggleEditing}
+                  />
+                </div>
+              </div>
+            </div>
           ) : null}
 
-          {cancelError ? (
+          {actionError ? (
             <div className={styles.banner} role="alert">
               <span className={styles.bannerTag}>Error</span>
-              <span>{cancelError}</span>
+              <span>{actionError}</span>
             </div>
           ) : null}
 
           {visibleWatches.length === 0 ? (
-            <EmptyState filter={filter} hasAny={counts.all > 0} />
+            <EmptyState filter={filter} hasAny={counts.total > 0} />
           ) : (
             <div className={styles.groups}>
               {groups.map((g) => (
@@ -359,6 +499,9 @@ export function DashboardClient(): JSX.Element {
                   expanded={isOpen(g.key)}
                   onToggle={onToggleGroup}
                   renderWatch={renderWatch}
+                  selectable={editing}
+                  selectState={selectStateOf(g.watches, selectedIds)}
+                  onToggleSelect={onToggleGroupSelect}
                 />
               ))}
             </div>
@@ -387,7 +530,7 @@ function DashboardHeader({
   counts,
   userEmail,
 }: {
-  counts: { all: number; active: number; fulfilled: number };
+  counts: { active: number; expired: number; total: number };
   userEmail: string | null;
 }): JSX.Element {
   return (
@@ -414,12 +557,12 @@ function DashboardHeader({
         </span>
         <span className={styles.tallyDot} aria-hidden="true" />
         <span className={styles.tallyItem}>
-          <span className={styles.tallyNum}>{counts.fulfilled}</span>
-          <span className={styles.tallyLabel}>Fulfilled</span>
+          <span className={styles.tallyNum}>{counts.expired}</span>
+          <span className={styles.tallyLabel}>Expired</span>
         </span>
         <span className={styles.tallyDot} aria-hidden="true" />
         <span className={styles.tallyItem}>
-          <span className={styles.tallyNum}>{counts.all}</span>
+          <span className={styles.tallyNum}>{counts.total}</span>
           <span className={styles.tallyLabel}>Total</span>
         </span>
       </div>
@@ -484,6 +627,8 @@ function GroupToolbar({
   onToggleAll,
   allExpanded,
   showToggleAll,
+  editing,
+  onToggleEditing,
 }: {
   groupBy: GroupBy;
   sortBy: SortBy;
@@ -492,6 +637,8 @@ function GroupToolbar({
   onToggleAll: () => void;
   allExpanded: boolean;
   showToggleAll: boolean;
+  editing: boolean;
+  onToggleEditing: () => void;
 }): JSX.Element {
   const selectId = useId();
   const sortOptions = sortOptionsFor(groupBy);
@@ -552,8 +699,132 @@ function GroupToolbar({
             {allExpanded ? "Collapse all" : "Expand all"}
           </button>
         ) : null}
+
+        <button
+          type="button"
+          className={`${styles.expandBtn} ${editing ? styles.expandBtnOn : ""}`}
+          onClick={onToggleEditing}
+          aria-pressed={editing}
+        >
+          {editing ? "Done" : "Edit"}
+        </button>
       </div>
     </div>
+  );
+}
+
+// --- multi-select edit bar -----------------------------------------------
+
+/**
+ * The bar that appears under the toolbar in edit mode: select-all, one shared
+ * name field, and the two bulk actions.
+ *
+ * The name field applies **one label to every selected watch**, overwriting
+ * whatever they were called — which is the point. Four fan-out showings of one
+ * film all becoming "Dad's birthday" is the case this exists for, and doing it
+ * card by card was the tedium being removed.
+ */
+function BulkBar({
+  selectedCount,
+  visibleCount,
+  name,
+  onNameChange,
+  onSelectAll,
+  onClear,
+  onRename,
+  onDelete,
+  busy,
+  onDone,
+}: {
+  selectedCount: number;
+  visibleCount: number;
+  name: string;
+  onNameChange: (v: string) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+  busy: "delete" | "rename" | null;
+  onDone: () => void;
+}): JSX.Element {
+  const none = selectedCount === 0;
+  const allPicked = selectedCount === visibleCount;
+  const inputId = useId();
+
+  return (
+    <section className={styles.bulkBar} aria-label="Edit selected watches">
+      <div className={styles.bulkTop}>
+        <span className={styles.bulkTag}>Editing</span>
+        <span className={styles.bulkCount}>
+          {none
+            ? "Nothing selected"
+            : `${selectedCount} of ${visibleCount} selected`}
+        </span>
+        <button
+          type="button"
+          className={styles.bulkLink}
+          onClick={allPicked ? onClear : onSelectAll}
+          disabled={busy !== null}
+        >
+          {allPicked ? "Clear" : "Select all"}
+        </button>
+        <button
+          type="button"
+          className={`${styles.bulkLink} ${styles.bulkDone}`}
+          onClick={onDone}
+          disabled={busy !== null}
+        >
+          Done
+        </button>
+      </div>
+
+      <div className={styles.bulkActions}>
+        <label className={styles.bulkFieldLabel} htmlFor={inputId}>
+          Name
+        </label>
+        <input
+          id={inputId}
+          className={styles.bulkInput}
+          value={name}
+          maxLength={120}
+          placeholder={
+            none ? "Select some cards first" : `Name all ${selectedCount}…`
+          }
+          disabled={none || busy !== null}
+          onChange={(e) => onNameChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !none && busy === null) onRename();
+          }}
+        />
+        <button
+          type="button"
+          className={styles.bulkApply}
+          onClick={onRename}
+          disabled={none || busy !== null}
+          aria-busy={busy === "rename"}
+        >
+          {busy === "rename"
+            ? "Applying…"
+            : `Apply${none ? "" : ` to ${selectedCount}`}`}
+        </button>
+        <button
+          type="button"
+          className={styles.bulkDelete}
+          onClick={onDelete}
+          disabled={none || busy !== null}
+          aria-busy={busy === "delete"}
+        >
+          {busy === "delete"
+            ? "Deleting…"
+            : `Delete${none ? "" : ` ${selectedCount}`}`}
+        </button>
+      </div>
+
+      <p className={styles.bulkHint}>
+        Leave the name blank and hit Apply to clear it — the cards fall back to
+        the movie title. Deleting is permanent.
+      </p>
+    </section>
   );
 }
 
@@ -586,10 +857,14 @@ function EmptyState({
     <section className={styles.empty} aria-label="No watches in this filter">
       <span className={styles.emptyEyebrow}>Nothing here</span>
       <p className={styles.emptyTitle}>
-        No watches in {filter === "all" ? "this view" : filter}.
+        {filter === "active"
+          ? "Nothing you’re watching is still live."
+          : "Nothing has expired yet."}
       </p>
       <p className={styles.emptyBody}>
-        Try a different filter, or start a new watch from the homepage.
+        {filter === "active"
+          ? "Check the Expired tab for the ones that have been and gone, or start a new watch from the homepage."
+          : "Everything you’re watching is still live — see the Active tab."}
       </p>
     </section>
   );
@@ -638,7 +913,8 @@ function SkeletonGrid(): JSX.Element {
   return (
     <div className={styles.skeletonWrap} aria-hidden="true">
       <div className={styles.skeletonTabs}>
-        {[0, 1, 2, 3, 4].map((i) => (
+        {/* One per real tab, so the skeleton doesn't promise a row of five. */}
+        {[0, 1].map((i) => (
           <span key={i} className={styles.skeletonTab} />
         ))}
       </div>

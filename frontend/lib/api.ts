@@ -298,9 +298,21 @@ export interface Watch {
    */
   showtime_at: string | null;
   notify_any_seat: boolean;
+  /**
+   * "Only alert me when this many of my seats are free side by side."
+   * `null` = off, i.e. alert as soon as any watched seat opens. Only values >= 2
+   * exist — the backend normalises 1 to null so there is one spelling of "off".
+   */
+  min_adjacent_seats: number | null;
   seats: WatchedSeat[];
   created_at: string;
 }
+
+/**
+ * Upper bound on the adjacent-seat threshold, mirroring
+ * `MAX_ADJACENT_SEATS` in `backend/app/schemas/watches.py`. Sending more is a 422.
+ */
+export const MAX_ADJACENT_SEATS = 20;
 
 export function listWatches(
   statusFilter: WatchStatus | "all" = "active",
@@ -318,6 +330,8 @@ export function createWatch(args: {
   name?: string | null;
   /** Naive ISO (`YYYY-MM-DDTHH:MM:SS`) theatre-local wall-clock, or null. */
   showtime_at?: string | null;
+  /** Adjacent-seat alert threshold; null/omitted = alert on each seat. */
+  min_adjacent_seats?: number | null;
 }): Promise<Watch> {
   return api<Watch>("/watches", { method: "POST", body: args });
 }
@@ -330,6 +344,7 @@ export function createWatch(args: {
 export interface WatchUpdate {
   name?: string | null;
   showtime_at?: string | null;
+  min_adjacent_seats?: number | null;
 }
 
 export function updateWatch(
@@ -357,8 +372,56 @@ export function addSeatsToWatch(
   });
 }
 
-export function cancelWatch(watch_id: string): Promise<Watch> {
-  return api<Watch>(`/watches/${watch_id}`, { method: "DELETE" });
+// --- Deleting watches -----------------------------------------------------
+
+/**
+ * Hard cap on ids per bulk call, mirroring `MAX_BULK_WATCHES` in
+ * `backend/app/schemas/watches.py`. Over the cap is a 422, so the UI chunks
+ * rather than letting the whole batch bounce.
+ */
+export const MAX_BULK_WATCHES = 200;
+
+export interface BulkDeleteResult {
+  /** Ids that were really removed. */
+  deleted: string[];
+  /** Ids that weren't yours or no longer exist — gone either way. */
+  missing: string[];
+}
+
+/**
+ * Permanently delete watches. **This is the only deletion path in the app** —
+ * "cancel" and "remove" are one action now, and it is a hard delete: the row,
+ * its seats and its seat events go, leaving only the `notifications` audit log
+ * (whose `watch_id` is `ON DELETE SET NULL`).
+ *
+ * Single-card deletes go through here too, with a one-element list. One
+ * request either way, one transaction, and no partial-success state for the UI
+ * to explain — a batch that half-succeeded because one id went stale in
+ * another tab helps nobody.
+ */
+export function deleteWatches(
+  watch_ids: string[],
+): Promise<BulkDeleteResult> {
+  return api<BulkDeleteResult>("/watches/bulk-delete", {
+    method: "POST",
+    body: { watch_ids },
+  });
+}
+
+export interface BulkRenameResult {
+  updated: Watch[];
+  missing: string[];
+}
+
+/** Apply one label to every listed watch. `null` clears it. */
+export function renameWatches(
+  watch_ids: string[],
+  name: string | null,
+): Promise<BulkRenameResult> {
+  return api<BulkRenameResult>("/watches/bulk-rename", {
+    method: "POST",
+    body: { watch_ids, name },
+  });
 }
 
 // --- Fan-out (apply a selection across a film's other showings) -----------
@@ -413,18 +476,19 @@ export function fanoutWatches(args: {
   targets: FanoutTarget[];
   notify_any_seat?: boolean;
   name?: string | null;
+  /**
+   * One threshold for the whole batch. The panel shows a single field above a
+   * single set of picks that every ticked showtime receives, so there is nothing
+   * a per-target value could mean. Unlike `name`, this **is** applied to targets
+   * the user already watches — otherwise the panel would be lying about the rule
+   * that decides whether they get alerted.
+   */
+  min_adjacent_seats?: number | null;
 }): Promise<FanoutResult[]> {
   return api<{ results: FanoutResult[] }>("/watches/fanout", {
     method: "POST",
     body: args,
   }).then((d) => d.results);
-}
-
-/** Permanently delete a watch (hard delete, any status). */
-export function removeWatch(watch_id: string): Promise<{ message: string }> {
-  return api<{ message: string }>(`/watches/${watch_id}/remove`, {
-    method: "DELETE",
-  });
 }
 
 // --- Sign out -------------------------------------------------------------

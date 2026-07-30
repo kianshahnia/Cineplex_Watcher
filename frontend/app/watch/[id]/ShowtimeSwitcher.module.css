@@ -166,18 +166,6 @@
   border-color: var(--brass);
 }
 
-/* The last ticked time. Still reads as ticked — it just can't be turned off,
-   because the page always has exactly one showtime in play at minimum. */
-.chipLocked {
-  cursor: default;
-}
-
-.chipLocked:hover {
-  border-color: var(--brass);
-  background: rgba(214, 219, 228, 0.14);
-  color: var(--mist);
-}
-
 /* Each chip is a tick box. An always-present square keeps the row from
    reflowing as times are ticked and unticked. */
 .tick {
@@ -260,6 +248,16 @@
   font-size: 13px;
   line-height: 1.5;
   color: var(--silver-dim);
+}
+
+/* Nothing ticked: the map below is greyed out, so this line is the only thing
+   telling you why — brass, because it's the one action left to take. */
+.hintQuiet {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--brass-soft);
 }
 
 @media (max-width: 720px) {

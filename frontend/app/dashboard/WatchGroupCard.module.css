@@ -9,6 +9,59 @@
 
 /* --- the row ----------------------------------------------------------- */
 
+/* Holds the (optional) select checkbox alongside the row button. The row keeps
+   `width: 100%` inside a flex parent that lets it grow, so a group with no
+   checkbox lays out exactly as it did before edit mode existed. */
+.rowWrap {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  min-width: 0;
+}
+
+.groupSelect {
+  flex-shrink: 0;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--hair-strong);
+  background: rgba(11, 19, 34, 0.55);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    background 180ms ease,
+    color 180ms ease;
+}
+
+.groupSelect:hover {
+  border-color: var(--hair-brass);
+}
+
+.groupSelect:focus-visible {
+  outline: none;
+  border-color: var(--platinum);
+}
+
+.groupSelectOn {
+  border-color: var(--brass);
+  background: var(--brass);
+}
+
+/* Partly ticked is its own state, drawn as an outline with a brass dash — a
+   half-selected row must not read as untouched. */
+.groupSelectSome {
+  border-color: var(--brass);
+  color: var(--brass);
+  background: rgba(200, 168, 107, 0.12);
+}
+
 .row {
   position: relative;
   width: 100%;
@@ -80,28 +133,6 @@
   );
   opacity: 0.45;
   pointer-events: none;
-}
-
-/* --- chevron ----------------------------------------------------------- */
-
-.chevron {
-  flex-shrink: 0;
-  font-size: 12px;
-  line-height: 1;
-  color: var(--silver-dim);
-  /* Same duration and curve as the panel, so the two read as one gesture. */
-  transition:
-    transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
-    color 200ms ease;
-}
-
-.chevronOpen {
-  transform: rotate(90deg);
-  color: var(--brass);
-}
-
-.row:hover .chevron {
-  color: var(--platinum);
 }
 
 /* --- label + count ----------------------------------------------------- */
@@ -198,26 +229,34 @@
   white-space: nowrap;
 }
 
-.statusPill {
-  font-family: var(--font-sans);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+/* --- chevron ----------------------------------------------------------- */
+
+/* Sits last in the row, in the slot the status pill used to occupy. Sized to a
+   real target rather than a bare 12px glyph — the whole row is the click target,
+   but the arrow is what the eye aims at, so it needs presence. */
+.chevron {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  font-size: 17px;
+  line-height: 1;
   color: var(--silver-dim);
-  white-space: nowrap;
+  /* Same duration and curve as the panel, so the two read as one gesture. */
+  transition:
+    transform 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    color 200ms ease;
 }
 
-.status_live {
+.chevronOpen {
+  transform: rotate(90deg);
   color: var(--brass);
 }
 
-.status_good {
-  color: var(--brass-soft);
-}
-
-.status_muted {
-  color: var(--silver-deep);
+.row:hover .chevron {
+  color: var(--platinum);
 }
 
 /* --- expanded body ----------------------------------------------------- */
@@ -304,9 +343,6 @@
     gap: 10px 12px;
     padding: 14px 16px;
   }
-  .chevron {
-    margin-top: 5px;
-  }
   .head {
     flex: 1;
     min-width: 0;
@@ -315,13 +351,15 @@
     white-space: normal;
   }
   .meta {
-    /* Drop below the label, clearing the chevron's column. */
+    /* Drop below the label — there is no left gutter to clear now that the
+       chevron lives on the right. */
     flex-basis: 100%;
-    padding-left: 24px;
   }
+  /* Stays on the label's line rather than wrapping to its own: the chevron is
+     the row's expand/collapse indicator, and it belongs beside the thing it
+     expands, not stranded under the facet list. */
   .tail {
-    margin-left: 0;
-    padding-left: 24px;
-    flex-basis: 100%;
+    align-self: flex-start;
+    margin-top: 2px;
   }
 }

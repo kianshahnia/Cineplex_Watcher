@@ -5,10 +5,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   ApiError,
+  MAX_ADJACENT_SEATS,
   MAX_FANOUT_TARGETS,
   addSeatsToWatch,
-  cancelWatch,
   createWatch,
+  deleteWatches,
   fanoutWatches,
   getMe,
   getShowtimeAlternatives,
@@ -26,6 +27,7 @@ import type {
   Watch,
 } from "@/lib/api";
 import { SeatMap } from "../../components/SeatMap";
+import { buildBenches, maxPossibleBlock } from "@/lib/seatGroups";
 import {
   useShowtimeEvents,
   type ShowtimeEvent,
@@ -128,6 +130,13 @@ function sortLabels(labels: string[]): string[] {
   return [...labels].sort((a, b) =>
     a.localeCompare(b, undefined, { numeric: true }),
   );
+}
+
+/** How a saved alert threshold reads back in the results list. */
+function describeThreshold(minAdjacent: number | null): string {
+  return minAdjacent === null
+    ? "Alerting on each seat"
+    : `Alerting on ${minAdjacent} seats together`;
 }
 
 // ---------------------------------------------------------------------------
@@ -250,11 +259,23 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
 
   // --- selection ----------------------------------------------------------
   const [selections, setSelections] = useState<SelectionMap>(() => new Map());
-  const [notifyAnySeat, setNotifyAnySeat] = useState<boolean>(false);
+  // Picks held while nothing is ticked. `selections` has to stay a subset of
+  // `ticked` (otherwise submit would fan seats out to a showtime the user can't
+  // see), so unticking the last time parks the shared set here instead of
+  // dropping it. A ref rather than state: nothing renders from it, and it must
+  // not trigger the persist effect. Not persisted — a reload resets to the
+  // anchor ticked, which is a deliberately bigger reset than a tick.
+  const stashedPicksRef = useRef<ReadonlySet<string>>(NO_SEATS);
   // The user's personal label for this watch, edited by clicking the page
   // title. Sent along with the create call; PATCHed in place afterwards.
   const [name, setName] = useState<string>("");
   const [nameSaving, setNameSaving] = useState<boolean>(false);
+  // "Only alert me when this many of my seats are free side by side."
+  // null = off, which is the original behaviour: alert on each seat as it opens.
+  // Deliberately part of the submit rather than saved on change — one button
+  // commits everything the panel is showing, and there is no blur/click race to
+  // lose a keystroke to.
+  const [minAdjacent, setMinAdjacent] = useState<number | null>(null);
 
   // hydrate from localStorage on mount
   useEffect(() => {
@@ -297,11 +318,9 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     });
     setTicked((prev) => {
       const out = new Set(prev);
-      if (!prune(prev, (id) => out.delete(id))) return prev;
-      // Something always has to be in play; if pruning emptied the set, the
-      // anchor is the one showtime guaranteed to still exist.
-      if (out.size === 0) out.add(anchorId);
-      return out;
+      // Emptying is allowed here: nothing ticked is a valid state (a greyed-out,
+      // read-only map), so a rescheduled set doesn't need a fallback tick.
+      return prune(prev, (id) => out.delete(id)) ? out : prev;
     });
   }, [siblings, anchorId]);
 
@@ -338,8 +357,11 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
       setAuth({ kind: "signed-in", user, watches });
       const anchorWatch = watches.get(anchorId);
       if (anchorWatch) {
-        setNotifyAnySeat(anchorWatch.notify_any_seat);
         setName(anchorWatch.name ?? "");
+        // Prefilled from the anchor only, matching `name`. Re-reading it on every
+        // tick would make the field jump around as the user builds a batch, and
+        // the batch is meant to end up sharing one threshold anyway.
+        setMinAdjacent(anchorWatch.min_adjacent_seats ?? null);
       }
     } catch {
       setAuth({ kind: "signed-out" });
@@ -623,6 +645,49 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     [watchedSeats, labelFor, anchorId],
   );
 
+  /**
+   * Ticked showtimes the user already watches — everything a Cancel acts on.
+   *
+   * Cancel used to be scoped to `scopedWatch`, i.e. offered only with a single
+   * time in play, which meant untangling a four-showtime fan-out took four
+   * visits to the switcher. Ticked *is* the page's scope for every other
+   * gesture (a seat pick lands on all of them), so it is the scope here too.
+   * Kept in the switcher's chronological order, so the button's label and any
+   * failure list read in the same order as the chips.
+   */
+  const cancelTargets = useMemo<number[]>(() => {
+    if (auth.kind !== "signed-in") return [];
+    const { watches } = auth;
+    return tickedIds.filter((id) => watches.has(id));
+  }, [auth, tickedIds]);
+
+  // --- adjacent-seat threshold -------------------------------------------
+
+  /** Physical adjacency of the room. Siblings share a layout, so the anchor's
+   *  stands in for all of them — same assumption the map itself makes. */
+  const benches = useMemo<string[][]>(
+    () => buildBenches(baseLayout.rows),
+    [baseLayout],
+  );
+
+  /** Every seat that will be on the watch: picked now plus already committed. */
+  const blockPicks = useMemo<Set<string>>(() => {
+    const out = new Set(selectedSeats);
+    for (const seatId of watchedSeats) out.add(seatId);
+    return out;
+  }, [selectedSeats, watchedSeats]);
+
+  /**
+   * The biggest block these picks could ever yield, if every seat between them
+   * went free. A threshold above it describes a watch that would sit until the
+   * screening starts and never say a word, which is what the CTA refuses to save.
+   */
+  const blockCeiling = useMemo<number>(
+    () => maxPossibleBlock(benches, blockPicks),
+    [benches, blockPicks],
+  );
+  const blockImpossible = minAdjacent !== null && minAdjacent > blockCeiling;
+
   // --- work summary -------------------------------------------------------
   const totalPendingSeats = useMemo<number>(() => {
     let total = 0;
@@ -630,17 +695,38 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     return total;
   }, [pendingByShowtime]);
 
-  // "Watch all seats" is a create-time flag on a single watch, and the fan-out
-  // endpoint carries one shared flag for the whole batch — so it stays scoped to
-  // the anchor. Siblings are seat-pick driven.
-  const anchorWatchAllWork = anchorWatch === null && notifyAnySeat;
+  /**
+   * Ticked showtimes already watched whose stored threshold differs from the
+   * field. These are what makes a threshold-only save possible: without them,
+   * changing 4 to 2 on an existing watch with no new seats to add would leave the
+   * CTA disabled and the change unsavable.
+   */
+  const thresholdTargets = useMemo<number[]>(() => {
+    if (auth.kind !== "signed-in") return [];
+    const { watches } = auth;
+    return tickedIds.filter((id) => {
+      const watch = watches.get(id);
+      return (
+        watch != null && (watch.min_adjacent_seats ?? null) !== minAdjacent
+      );
+    });
+  }, [auth, tickedIds, minAdjacent]);
 
   const [submit, setSubmit] = useState<SubmitState>({ kind: "idle" });
+  // Cancelling is tracked apart from `submit` so the primary CTA doesn't read
+  // "Saving" while watches are being torn down — a distinction that barely
+  // registered when cancel meant one request and matters when it means eight.
+  const [cancelling, setCancelling] = useState<boolean>(false);
 
   const canSubmit =
     auth.kind === "signed-in" &&
     submit.kind !== "submitting" &&
-    (totalPendingSeats > 0 || anchorWatchAllWork);
+    !cancelling &&
+    // Nothing ticked = nothing to save to, whatever else is set.
+    ticked.size > 0 &&
+    // A threshold the picks can never satisfy would create a silent watch.
+    !blockImpossible &&
+    (totalPendingSeats > 0 || thresholdTargets.length > 0);
 
   // --- interaction --------------------------------------------------------
 
@@ -652,37 +738,43 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
 
   const scopedIsAll = scopedWatch?.notify_any_seat === true;
 
-  // Set one seat's picked state. `select` is decided by the SeatMap: a click
-  // toggles, a drag paints every crossed seat to the same value. The pick lands
-  // on every ticked showtime at once — with one ticked that is exactly the
-  // single-showtime behaviour, with several it is the whole point.
-  const onPaintSeat = useCallback(
-    (seatId: string, select: boolean): void => {
-      if (ticked.size === 0) return;
-      // An existing "watch all seats" watch covers every seat already, so
-      // picking individual ones is a no-op rather than a contradiction.
+  /**
+   * Set a batch of seats to the same picked state, on every ticked showtime at
+   * once — with one ticked that is exactly the old single-showtime behaviour,
+   * with several it is the whole point.
+   *
+   * Batched rather than one-seat-at-a-time so a row-letter click lands in a
+   * single state update instead of one per seat in the row.
+   */
+  const paintSeats = useCallback(
+    (seatIds: string[], select: boolean): void => {
+      if (ticked.size === 0 || seatIds.length === 0) return;
+      // A pre-existing "watch all seats" watch (the flag is no longer settable,
+      // but old watches still carry it) covers every seat already, so picking
+      // individual ones is a no-op rather than a contradiction.
       if (scopedIsAll) return;
-      // Picking a specific seat on a new anchor watch exits "watch all" mode;
-      // the two are mutually exclusive so the summary stays unambiguous.
-      if (select && soleTicked === anchorId && anchorWatchAllWork) {
-        setNotifyAnySeat(false);
-      }
 
       setSelections((prev) => {
         const out = new Map(prev);
         let changed = false;
         for (const id of ticked) {
-          // Already committed here — nothing to add, and nothing a deselect
-          // could take away (per-seat delete needs a backend endpoint).
-          if ((watchedByShowtime.get(id) ?? NO_SEATS).has(seatId)) continue;
+          const watched = watchedByShowtime.get(id) ?? NO_SEATS;
           const current = out.get(id) ?? NO_SEATS;
-          if (current.has(seatId) === select) continue;
           const next = new Set(current);
-          if (select) {
-            next.add(seatId);
-          } else {
-            next.delete(seatId);
+          let touched = false;
+          for (const seatId of seatIds) {
+            // Already committed here — nothing to add, and nothing a deselect
+            // could take away (per-seat delete needs a backend endpoint).
+            if (watched.has(seatId)) continue;
+            if (next.has(seatId) === select) continue;
+            if (select) {
+              next.add(seatId);
+            } else {
+              next.delete(seatId);
+            }
+            touched = true;
           }
+          if (!touched) continue;
           changed = true;
           if (next.size === 0) {
             out.delete(id);
@@ -695,36 +787,27 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
       setTickNotice(null);
       clearSubmitNotice();
     },
-    [
-      ticked,
-      scopedIsAll,
-      soleTicked,
-      anchorId,
-      anchorWatchAllWork,
-      watchedByShowtime,
-      clearSubmitNotice,
-    ],
+    [ticked, scopedIsAll, watchedByShowtime, clearSubmitNotice],
   );
 
-  const onToggleWatchAll = useCallback((): void => {
-    if (anchorWatch !== null) return;
-    setNotifyAnySeat((prev) => {
-      const next = !prev;
-      // "Watch all seats" makes the anchor's individual picks redundant — clear
-      // them so the summary and the submit payload are unambiguous. Sibling
-      // picks are untouched; they're separate watches.
-      if (next) {
-        setSelections((sel) => {
-          if (!sel.has(anchorId)) return sel;
-          const out = new Map(sel);
-          out.delete(anchorId);
-          return out;
-        });
-      }
-      return next;
-    });
-    clearSubmitNotice();
-  }, [anchorWatch, anchorId, clearSubmitNotice]);
+  // One seat. `select` is decided by the SeatMap: a click toggles, a drag paints
+  // every crossed seat to the same value.
+  const onPaintSeat = useCallback(
+    (seatId: string, select: boolean): void => {
+      paintSeats([seatId], select);
+    },
+    [paintSeats],
+  );
+
+  const onMinAdjacentChange = useCallback(
+    (next: number | null): void => {
+      setMinAdjacent(next);
+      // The old result list described a threshold that is no longer the one in
+      // the field, so it stops being true the moment this changes.
+      clearSubmitNotice();
+    },
+    [clearSubmitNotice],
+  );
 
   const onClearSelection = useCallback((): void => {
     setSelections((prev) => {
@@ -744,35 +827,60 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
    * Unticking therefore drops that time's picks — that is what a tick box means,
    * and it keeps the CTA's count honest. Ticking makes the new time inherit the
    * shared set, so "watch these seats at the 7 PM too" is one click.
+   *
+   * **Unticking the last time is allowed** and puts the page into a greyed-out,
+   * read-only state. Because the invariant is "selections keys ⊆ ticked" — which
+   * is what keeps submit from fanning picks out to a showtime the user can't see
+   * — the picks can't just stay in the map. They're stashed instead, and handed
+   * back the moment a time is ticked again, so unticking everything reads as a
+   * pause rather than a Clear.
    */
   const onToggleTicked = useCallback(
     (showtimeId: number): void => {
       const next = new Set(ticked);
       if (next.has(showtimeId)) {
-        // Something always has to be in play — the map and the panel have
-        // nothing to be about otherwise. To swap times, tick the new one first.
-        if (next.size === 1) return;
         next.delete(showtimeId);
       } else {
         next.add(showtimeId);
       }
       setTicked(next);
+
       // The shared set comes from the *previous* ticked set, so unticking the
       // only showtime that happened to carry the picks doesn't erase them for
-      // the rest.
-      const shared = unionPicks(selections, ticked);
-      setSelections(groupedSelections(next, shared));
-      setTickNotice(
-        shared.size > 0 && next.size > ticked.size
-          ? `Your ${plural(shared.size, "pick")} now applies to all ${next.size} times.`
-          : null,
-      );
-      // Picking specific seats and "watch all seats" are mutually exclusive, and
-      // the flag can only ride one watch — so widening the batch drops it.
-      if (next.size > 1 && anchorWatch === null) setNotifyAnySeat(false);
+      // the rest. Coming back from empty there is no previous set to read, so
+      // the stash stands in.
+      const wasEmpty = ticked.size === 0;
+      const shared = wasEmpty
+        ? stashedPicksRef.current
+        : unionPicks(selections, ticked);
+
+      let notice: string | null = null;
+      if (next.size === 0) {
+        stashedPicksRef.current = shared;
+        setSelections(new Map());
+        if (shared.size > 0) {
+          notice = `${plural(shared.size, "pick")} held — tick a time to bring ${
+            shared.size === 1 ? "it" : "them"
+          } back.`;
+        }
+      } else {
+        stashedPicksRef.current = NO_SEATS;
+        setSelections(groupedSelections(next, shared));
+        if (shared.size === 0) {
+          notice = null;
+        } else if (wasEmpty) {
+          // Closes the loop on the "held" message above. The seats lighting back
+          // up says it too, but only if you happen to be looking at the map.
+          notice = `${plural(shared.size, "pick")} restored.`;
+        } else if (next.size > ticked.size) {
+          // Only reachable at 2+ ticked, so "all N times" is never "all 1 time".
+          notice = `Your ${plural(shared.size, "pick")} now applies to all ${plural(next.size, "time")}.`;
+        }
+      }
+      setTickNotice(notice);
       clearSubmitNotice();
     },
-    [ticked, selections, anchorWatch, clearSubmitNotice],
+    [ticked, selections, clearSubmitNotice],
   );
 
   // --- submission ---------------------------------------------------------
@@ -804,27 +912,78 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     let anchorWatchResult: Watch | null = null;
     let anchorError: string | null = null;
 
+    // --- alert threshold on watches that already exist -------------------
+    // A brand-new watch gets the threshold from `createWatch`, and a fan-out
+    // target gets it from the fan-out call. What is left is showtimes the user
+    // already watches and is not fanning to — including the anchor, whose
+    // create-path is skipped when its watch exists. Those need a PATCH, or the
+    // field would silently not apply to the very watches it was prefilled from.
+    const fanoutIds = new Set(targets.map((t) => t.showtime_id));
+    const patchIds = thresholdTargets.filter((id) => !fanoutIds.has(id));
+    const rethreshold = new Map<number, Watch>();
+    for (const showtimeId of patchIds) {
+      const existing = auth.watches.get(showtimeId);
+      if (!existing) continue;
+      // A showtime that also has seats to save reports through its own line
+      // below; a duplicate line saying only "threshold updated" would be noise.
+      const alsoHasSeats = (pendingByShowtime.get(showtimeId)?.length ?? 0) > 0;
+      try {
+        rethreshold.set(
+          showtimeId,
+          await updateWatch(existing.id, { min_adjacent_seats: minAdjacent }),
+        );
+        if (!alsoHasSeats) {
+          lines.push({
+            showtime_id: showtimeId,
+            ok: true,
+            text: describeThreshold(minAdjacent),
+            alreadyAvailable: [],
+          });
+        }
+      } catch (err) {
+        // Reported whether or not seats are also being saved: a failure here
+        // means the alert rule is not what the panel claims.
+        lines.push({
+          showtime_id: showtimeId,
+          ok: false,
+          text: errorMessage(err, "Couldn't save the alert setting."),
+          alreadyAvailable: [],
+        });
+      }
+    }
+    if (rethreshold.size > 0) {
+      setAuth((prev) => {
+        if (prev.kind !== "signed-in") return prev;
+        const next = new Map(prev.watches);
+        for (const [showtimeId, watch] of rethreshold) next.set(showtimeId, watch);
+        return { ...prev, watches: next };
+      });
+    }
+
     // --- anchor ----------------------------------------------------------
-    if (anchorPending.length > 0 || anchorWatchAllWork) {
+    if (anchorPending.length > 0) {
       try {
         let watch = anchorWatch;
         if (!watch) {
           watch = await createWatch({
             theatre_id,
             showtime_id: anchorId,
-            notify_any_seat: notifyAnySeat,
+            // Always specific seats now: "watch any seat" was a create-time
+            // flag with no representation on the map, replaced by Select all
+            // (bugs.md #12). Watches created before that still carry it and are
+            // still honoured — nothing sets it any more.
+            notify_any_seat: false,
             name: trimmedName,
+            min_adjacent_seats: minAdjacent,
           });
         }
-        if (anchorPending.length > 0) {
-          watch = await addSeatsToWatch(
-            watch.id,
-            anchorPending.map((seatId) => ({
-              seat_key: seatId,
-              seat_label: labelFor(anchorId, seatId),
-            })),
-          );
-        }
+        watch = await addSeatsToWatch(
+          watch.id,
+          anchorPending.map((seatId) => ({
+            seat_key: seatId,
+            seat_label: labelFor(anchorId, seatId),
+          })),
+        );
         anchorWatchResult = watch;
         committed.push(anchorId);
         lines.push({
@@ -859,6 +1018,7 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
           targets,
           notify_any_seat: false,
           name: trimmedName,
+          min_adjacent_seats: minAdjacent,
         });
         for (const r of results) {
           const applied =
@@ -938,11 +1098,11 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
   }, [
     auth,
     name,
+    minAdjacent,
+    thresholdTargets,
     pendingByShowtime,
     anchorId,
     anchorWatch,
-    anchorWatchAllWork,
-    notifyAnySeat,
     labelFor,
     theatre_id,
     refreshWatches,
@@ -985,36 +1145,58 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     [auth.kind, anchorWatch, anchorId],
   );
 
-  /** Cancels the watch on the single ticked showtime. */
-  const onCancelWatch = useCallback(async (): Promise<void> => {
-    if (auth.kind !== "signed-in" || !scopedWatch || soleTicked === null) return;
-    const target = soleTicked;
-    setSubmit({ kind: "submitting" });
+  /**
+   * Cancel the watch on every ticked showtime, in one gesture.
+   *
+   * One request, one transaction: `deleteWatches` takes the whole id list, so
+   * there is no partial-success state to explain and no per-target retry to
+   * offer — it either all went, or nothing did and the panel says so.
+   *
+   * Cancelling is a **permanent delete**, not a soft archive: the watch, its
+   * seats and its history are gone. That is deliberate (bugs.md #8) — one
+   * destructive action rather than two that were easy to confuse.
+   */
+  const onCancelWatches = useCallback(async (): Promise<void> => {
+    if (auth.kind !== "signed-in" || cancelling || cancelTargets.length === 0) {
+      return;
+    }
+    const { watches } = auth;
+    const targets = cancelTargets.flatMap((showtimeId) => {
+      const watch = watches.get(showtimeId);
+      return watch ? [{ showtimeId, watchId: watch.id }] : [];
+    });
+    if (targets.length === 0) return;
+
+    setCancelling(true);
+    setSubmit({ kind: "idle" });
     try {
-      await cancelWatch(scopedWatch.id);
+      // `missing` ids are already gone, so both halves of the response mean
+      // the same thing here: stop showing them.
+      await deleteWatches(targets.map((t) => t.watchId));
       setAuth((prev) => {
         if (prev.kind !== "signed-in") return prev;
-        const watches = new Map(prev.watches);
-        watches.delete(target);
-        return { ...prev, watches };
+        const next = new Map(prev.watches);
+        for (const t of targets) next.delete(t.showtimeId);
+        return { ...prev, watches: next };
       });
-      setSubmit({ kind: "idle" });
-      if (target === anchorId) setNotifyAnySeat(false);
+      // No closing word needed on success — the "already watching" flag and
+      // the seat chips disappearing is the confirmation.
     } catch (err) {
       setSubmit({
         kind: "error",
-        message: errorMessage(err, "Couldn't cancel that watch."),
+        message: errorMessage(
+          err,
+          targets.length === 1
+            ? "Couldn't cancel that watch."
+            : "Couldn't cancel those watches. Nothing was changed.",
+        ),
       });
+    } finally {
+      setCancelling(false);
     }
-  }, [auth.kind, scopedWatch, soleTicked, anchorId]);
+  }, [auth, cancelling, cancelTargets]);
 
   const isSignedIn = auth.kind === "signed-in";
-  // "Watch all seats" is anchor-only and create-time-only: the flag can't be
-  // PATCHed after creation, and fan-out carries one shared flag for the whole
-  // batch rather than one per target — so it is only offered when the anchor is
-  // the only time in play.
-  const allowWatchAll =
-    isSignedIn && soleTicked === anchorId && anchorWatch === null;
 
   const errorIds = useMemo(() => new Set(loadErrors.keys()), [loadErrors]);
 
@@ -1030,13 +1212,16 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
     [tickedIds, loadErrors],
   );
 
-  // What the action panel is configuring: one time, or the whole ticked batch.
+  // What the action panel is configuring: one time, the whole ticked batch, or
+  // (nothing ticked) no showtime at all.
   const panelScope =
-    soleTicked !== null
-      ? hasSwitcher
-        ? timeLabelFor(soleTicked)
-        : null
-      : plural(ticked.size, "time");
+    ticked.size === 0
+      ? null
+      : soleTicked !== null
+        ? hasSwitcher
+          ? timeLabelFor(soleTicked)
+          : null
+        : plural(ticked.size, "time");
 
   return (
     <>
@@ -1094,10 +1279,12 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
           statusMode="neutral"
           freeAt={freeAt}
           multiTimes={ticked.size > 1}
+          dimmed={ticked.size === 0}
           selectedIds={selectedSeats}
           watchedIds={watchedSeats}
           flashIds={flashIds}
           onSeatPaint={onPaintSeat}
+          onBatchPaint={paintSeats}
         />
 
         <ActionPanel
@@ -1105,9 +1292,6 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
           tickedCount={ticked.size}
           scopedWatch={scopedWatch}
           panelScope={panelScope}
-          allowWatchAll={allowWatchAll}
-          watchAll={notifyAnySeat}
-          onToggleWatchAll={onToggleWatchAll}
           watchedLabels={panelWatchedLabels}
           pendingLabels={panelPendingLabels}
           pendingCount={panelPendingLabels.length}
@@ -1116,8 +1300,14 @@ export function WatchInteractive({ initial }: Props): JSX.Element {
           canSubmit={canSubmit}
           submit={submit}
           onSubmit={onSubmit}
-          onCancelWatch={onCancelWatch}
+          cancelTargets={cancelTargets}
+          cancelling={cancelling}
+          onCancelWatches={onCancelWatches}
           timeLabelFor={timeLabelFor}
+          blockCeiling={blockCeiling}
+          blockImpossible={blockImpossible}
+          minAdjacent={minAdjacent}
+          onMinAdjacentChange={onMinAdjacentChange}
         />
       </section>
     </>
@@ -1131,9 +1321,6 @@ function ActionPanel({
   tickedCount,
   scopedWatch,
   panelScope,
-  allowWatchAll,
-  watchAll,
-  onToggleWatchAll,
   watchedLabels,
   pendingLabels,
   pendingCount,
@@ -1142,8 +1329,14 @@ function ActionPanel({
   canSubmit,
   submit,
   onSubmit,
-  onCancelWatch,
+  cancelTargets,
+  cancelling,
+  onCancelWatches,
   timeLabelFor,
+  blockCeiling,
+  blockImpossible,
+  minAdjacent,
+  onMinAdjacentChange,
 }: {
   auth: AuthState;
   tickedCount: number;
@@ -1153,9 +1346,6 @@ function ActionPanel({
   /** What's being configured — a single time, the ticked batch, or (null) the
    *  only showing this film has. */
   panelScope: string | null;
-  allowWatchAll: boolean;
-  watchAll: boolean;
-  onToggleWatchAll: () => void;
   watchedLabels: string[];
   pendingLabels: string[];
   pendingCount: number;
@@ -1164,21 +1354,58 @@ function ActionPanel({
   canSubmit: boolean;
   submit: SubmitState;
   onSubmit: () => void;
-  onCancelWatch: () => void;
+  /** Ticked showtimes that already have a watch — what Cancel acts on, in
+   *  chronological order. */
+  cancelTargets: number[];
+  cancelling: boolean;
+  onCancelWatches: () => void;
   timeLabelFor: (showtimeId: number) => string;
+  /** Biggest block the current picks could ever produce. */
+  blockCeiling: number;
+  /** True when the threshold is above that, i.e. it could never fire. */
+  blockImpossible: boolean;
+  minAdjacent: number | null;
+  onMinAdjacentChange: (next: number | null) => void;
 }): JSX.Element {
-  // "Already watching" and cancel are per-showtime concepts: with several times
-  // ticked there is no single watch they could refer to, so both wait until the
-  // user narrows back down to one.
+  // The *seat* affordances stay per-showtime: with several times ticked there
+  // is no single watch whose mode ("all seats" vs specific) the panel could be
+  // describing. Cancel is different — it needs no single subject, so it acts on
+  // every ticked watch at once.
   const single = tickedCount === 1;
+  // Nothing ticked: the map above is greyed out and there is no showtime any of
+  // this could be about, so the panel says only what to do next.
+  const none = tickedCount === 0;
   const hasExisting = single && scopedWatch !== null;
   const existingIsAll = single && scopedWatch?.notify_any_seat === true;
   const existingIsSpecific = hasExisting && !existingIsAll;
   const isSignedIn = auth.kind === "signed-in";
   const isSubmitting = submit.kind === "submitting";
 
+  // --- cancel scope -------------------------------------------------------
+  const anyExisting = cancelTargets.length > 0;
+  const soleCancelId = cancelTargets.length === 1 ? cancelTargets[0] : undefined;
+  let cancelLabel = "Cancel watch";
+  if (cancelTargets.length > 1) {
+    cancelLabel = `Cancel ${cancelTargets.length} watches`;
+  } else if (soleCancelId !== undefined) {
+    // With one time in play the panel kicker already names it, so reuse that
+    // wording (and its "no switcher ⇒ no time to name" null). With several
+    // ticked but only one watched, the button has to say which one it means.
+    const scope = single ? panelScope : timeLabelFor(soleCancelId);
+    if (scope) cancelLabel = `Cancel ${scope} watch`;
+  }
+
   let ctaLabel: string;
-  if (!single && pendingCount > 0) {
+  if (none) {
+    ctaLabel = "Select a showtime";
+  } else if (blockImpossible) {
+    // Says how to fix it, not just that it's broken. Checked before every other
+    // branch because nothing else the button could offer is savable.
+    ctaLabel =
+      blockCeiling >= 2
+        ? `Longest block is ${blockCeiling} — lower to ${blockCeiling}`
+        : "Pick seats next to each other";
+  } else if (!single && pendingCount > 0) {
     ctaLabel = `Start watching ${pendingCount} × ${plural(tickedCount, "time")}`;
   } else if (existingIsAll) {
     ctaLabel = "Watching all seats";
@@ -1187,12 +1414,10 @@ function ActionPanel({
       totalPendingSeats > 0
         ? `Add ${plural(totalPendingSeats, "seat")}`
         : "Saved";
-  } else if (watchAll && totalPendingSeats === 0) {
-    ctaLabel = "Start watching all seats";
   } else if (totalPendingSeats > 0) {
     ctaLabel = `Start watching ${plural(totalPendingSeats, "seat")}`;
   } else {
-    ctaLabel = allowWatchAll ? "Pick seats or watch all" : "Pick seats";
+    ctaLabel = "Pick seats";
   }
 
   return (
@@ -1201,10 +1426,12 @@ function ActionPanel({
         <span className={styles.kicker}>
           {panelScope ? `Watch setup — ${panelScope}` : "Watch setup"}
         </span>
-        {hasExisting ? (
+        {anyExisting ? (
           <span className={styles.statusFlag}>
             <span className={styles.flagDot} aria-hidden="true" />
-            Already watching this showtime
+            {single
+              ? "Already watching this showtime"
+              : `Already watching ${cancelTargets.length} of ${tickedCount} times`}
           </span>
         ) : null}
       </div>
@@ -1212,43 +1439,10 @@ function ActionPanel({
       <div className={styles.grid}>
         {/* LEFT — what to watch */}
         <div className={styles.selectionCol}>
-          {existingIsAll ? (
-            <AllSeatsBox locked />
-          ) : allowWatchAll ? (
-            <>
-              <button
-                type="button"
-                className={`${styles.watchAllBtn} ${watchAll ? styles.watchAllBtnActive : ""}`}
-                onClick={onToggleWatchAll}
-                aria-pressed={watchAll}
-              >
-                <span className={styles.watchAllMark} aria-hidden="true">
-                  {watchAll ? "✓" : "+"}
-                </span>
-                <span className={styles.watchAllCopy}>
-                  <span className={styles.watchAllTitle}>
-                    {watchAll ? "Watching all seats" : "Watch all seats"}
-                  </span>
-                  <span className={styles.watchAllSub}>
-                    Every seat in this auditorium — we alert you the moment any
-                    one opens up.
-                  </span>
-                </span>
-              </button>
-
-              {!watchAll ? (
-                <>
-                  <div className={styles.orRule}>
-                    <span>or pick specific seats</span>
-                  </div>
-                  <SelectionSummary
-                    count={pendingCount}
-                    labels={pendingLabels}
-                    onClear={onClearSelection}
-                  />
-                </>
-              ) : null}
-            </>
+          {none ? (
+            <NoShowtimeBox />
+          ) : existingIsAll ? (
+            <AllSeatsBox />
           ) : (
             <>
               {watchedLabels.length > 0 ? (
@@ -1258,16 +1452,7 @@ function ActionPanel({
                       ? "Currently watching"
                       : "Already watching at every ticked time"}
                   </span>
-                  <ul className={styles.chipList}>
-                    {watchedLabels.map((label) => (
-                      <li
-                        className={`${styles.seatChip} ${styles.seatChipWatched}`}
-                        key={`w-${label}`}
-                      >
-                        {label}
-                      </li>
-                    ))}
-                  </ul>
+                  <SeatChips labels={watchedLabels} keyPrefix="w" watched />
                 </div>
               ) : null}
               <SelectionSummary
@@ -1280,7 +1465,7 @@ function ActionPanel({
             </>
           )}
 
-          {!single && pendingCount > 0 ? (
+          {!single && !none && pendingCount > 0 ? (
             <p className={styles.spanNote}>
               {plural(pendingCount, "seat")} × {plural(tickedCount, "time")} ={" "}
               {totalPendingSeats} seat watches. One tap saves them all.
@@ -1304,6 +1489,21 @@ function ActionPanel({
                   {isSubmitting ? "…" : "→"}
                 </span>
               </button>
+
+              {/* Sits under the CTA because it qualifies what the CTA will do.
+                  Hidden with nothing ticked (there is no watch for it to be
+                  about) and on a legacy "watch all seats" watch, where the
+                  poller ignores the threshold — an every-seat watch has no fixed
+                  selection for blocks to form in. */}
+              {!none && !existingIsAll ? (
+                <AdjacentSeatField
+                  value={minAdjacent}
+                  onChange={onMinAdjacentChange}
+                  ceiling={blockCeiling}
+                  impossible={blockImpossible}
+                  disabled={isSubmitting || cancelling}
+                />
+              ) : null}
 
               {submit.kind === "report" ? (
                 <ResultsList
@@ -1330,27 +1530,33 @@ function ActionPanel({
                   </span>
                 ) : (
                   <span className={styles.statusIdle}>
-                    {hasExisting
-                      ? "Live — we’ll alert you when a seat opens."
-                      : "No password — alerts arrive by email."}
+                    {none
+                      ? "Nothing selected — tick a time above."
+                      : anyExisting
+                        ? "Live — we’ll alert you when a seat opens."
+                        : "No password — alerts arrive by email."}
                   </span>
                 )}
-                {hasExisting ? (
+                {anyExisting ? (
                   <button
                     type="button"
                     className={styles.cancelLink}
-                    onClick={onCancelWatch}
-                    disabled={isSubmitting}
+                    onClick={onCancelWatches}
+                    disabled={isSubmitting || cancelling}
+                    aria-busy={cancelling}
+                    title={
+                      cancelTargets.length > 1
+                        ? `${cancelTargets.map(timeLabelFor).join(", ")} — removed permanently`
+                        : "Removed permanently"
+                    }
                   >
-                    {panelScope
-                      ? `Cancel ${panelScope} watch`
-                      : "Cancel watch"}
+                    {cancelling ? "Cancelling…" : cancelLabel}
                   </button>
                 ) : null}
               </div>
             </>
           ) : auth.kind === "signed-out" ? (
-            <SignedOutPrompt count={totalPendingSeats} watchAll={watchAll} />
+            <SignedOutPrompt count={totalPendingSeats} />
           ) : (
             <div className={styles.loadingHint}>
               <span className={styles.spinner} aria-hidden="true" />
@@ -1407,19 +1613,86 @@ function ResultsList({
   );
 }
 
-// A single "All" summary box, shown when a watch covers every seat (rather
-// than listing every seat label as a chip). `locked` reflects that an existing
-// watch's mode can't be changed without cancelling.
-function AllSeatsBox({ locked = false }: { locked?: boolean }): JSX.Element {
+/**
+ * Nothing is ticked. Occupies the slot the selection summary would, so the panel
+ * keeps its shape, and says the one thing there is to say — the map above is
+ * greyed out and this is why.
+ */
+function NoShowtimeBox(): JSX.Element {
+  return (
+    <div className={styles.emptyBox}>
+      <span className={styles.emptyTitle}>No showtime selected</span>
+      <span className={styles.emptySub}>
+        Tick a time above to start picking seats. Nothing is lost — any picks you
+        had are held until you do.
+      </span>
+    </div>
+  );
+}
+
+/**
+ * A seat-label chip list, capped.
+ *
+ * Select all makes a whole-auditorium pick one click, so these lists went from
+ * "a handful of seats" to "258 of them" — a wall of chips that buries the
+ * count, the Clear link and the CTA below it. Past the cap the rest collapse
+ * into one `+N` chip whose tooltip spells them out, the same convention the
+ * dashboard card uses. `sortLabels` has already put them in human order, so the
+ * ones shown are the front of the room rather than an arbitrary slice.
+ */
+const MAX_VISIBLE_CHIPS = 24;
+
+function SeatChips({
+  labels,
+  keyPrefix,
+  watched = false,
+}: {
+  labels: string[];
+  keyPrefix: string;
+  watched?: boolean;
+}): JSX.Element {
+  const shown = labels.slice(0, MAX_VISIBLE_CHIPS);
+  const rest = labels.slice(MAX_VISIBLE_CHIPS);
+  const chipClass = watched
+    ? `${styles.seatChip} ${styles.seatChipWatched}`
+    : styles.seatChip;
+
+  return (
+    <ul className={styles.chipList}>
+      {shown.map((label) => (
+        <li className={chipClass} key={`${keyPrefix}-${label}`}>
+          {label}
+        </li>
+      ))}
+      {rest.length > 0 ? (
+        <li
+          className={`${styles.seatChip} ${styles.seatChipMore}`}
+          title={rest.join(", ")}
+        >
+          +{rest.length}
+        </li>
+      ) : null}
+    </ul>
+  );
+}
+
+/**
+ * Shown for a watch carrying the legacy `notify_any_seat` flag, instead of
+ * listing every seat label as a chip.
+ *
+ * Nothing can create one of these any more — "Watch all seats" was replaced by
+ * Select all (bugs.md #12), which paints real picks. Watches made before that
+ * still hold the flag, are still honoured by the poller, and still need
+ * describing here; the mode can't be edited, so cancelling is the only way out.
+ */
+function AllSeatsBox(): JSX.Element {
   return (
     <div className={styles.allBox}>
       <span className={styles.allBadge}>All</span>
       <span className={styles.allCopy}>
         <span className={styles.allTitle}>Every seat is watched</span>
         <span className={styles.allSub}>
-          {locked
-            ? "Tracking all seats in this showtime — cancel below to change."
-            : "We’ll alert you the moment any seat in this auditorium opens."}
+          Tracking all seats in this showtime — cancel below to change.
         </span>
       </span>
     </div>
@@ -1467,13 +1740,7 @@ function SelectionSummary({
       </div>
       {labels.length > 0 ? (
         <>
-          <ul className={styles.chipList}>
-            {labels.map((label) => (
-              <li className={styles.seatChip} key={`s-${label}`}>
-                {label}
-              </li>
-            ))}
-          </ul>
+          <SeatChips labels={labels} keyPrefix="s" />
           <button type="button" className={styles.clearLink} onClick={onClear}>
             Clear selection
           </button>
@@ -1481,22 +1748,118 @@ function SelectionSummary({
       ) : (
         <p className={styles.hint}>
           {showingWatched
-            ? "Click another seat to add it to this watch — or click and drag across several at once."
-            : "Click a seat to pick it — or click and drag across several at once. Occupied seats too; we ping you when a watched seat opens up."}
+            ? "Click another seat to add it to this watch — drag across several, or click a row letter to take the whole row."
+            : "Click a seat to pick it — drag across several, or click a row letter to take the whole row. Occupied seats too; we ping you when a watched seat opens up."}
         </p>
       )}
     </div>
   );
 }
 
-function SignedOutPrompt({
-  count,
-  watchAll,
+/**
+ * "Notify only when [N] seats open in a row" — the whole feature's one control.
+ *
+ * A plain number rather than a toggle plus a number: 1 already means "tell me
+ * about every seat", so an on/off switch would be a second spelling of a state
+ * the value can express, and the codebase has been bitten by exactly that before
+ * (`min_adjacent_seats` is normalised server-side for the same reason).
+ *
+ * The field never blocks typing. It reports what the current picks could
+ * actually deliver and lets the CTA — which is the thing that would create a
+ * silent watch — be the one that refuses.
+ */
+function AdjacentSeatField({
+  value,
+  onChange,
+  ceiling,
+  impossible,
+  disabled,
 }: {
-  count: number;
-  watchAll: boolean;
+  value: number | null;
+  onChange: (next: number | null) => void;
+  /** Biggest block the current picks could ever produce. */
+  ceiling: number;
+  impossible: boolean;
+  disabled: boolean;
 }): JSX.Element {
-  const ready = count > 0 || watchAll;
+  const commit = (raw: string): void => {
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed)) {
+      onChange(null);
+      return;
+    }
+    // Below 2 is "off", not an error — and the server normalises it the same way.
+    if (parsed < 2) {
+      onChange(null);
+      return;
+    }
+    onChange(Math.min(parsed, MAX_ADJACENT_SEATS));
+  };
+
+  return (
+    <div className={styles.blockField}>
+      <div className={styles.blockRow}>
+        <label className={styles.blockLabel} htmlFor="min-adjacent-seats">
+          Notify only when at least
+        </label>
+        <input
+          id="min-adjacent-seats"
+          className={`${styles.blockInput} ${impossible ? styles.blockInputBad : ""}`}
+          type="number"
+          inputMode="numeric"
+          min={1}
+          max={MAX_ADJACENT_SEATS}
+          step={1}
+          value={value ?? 1}
+          disabled={disabled}
+          aria-invalid={impossible}
+          aria-describedby="min-adjacent-hint"
+          onChange={(e) => commit(e.target.value)}
+        />
+        <span className={styles.blockLabel}>
+          {value === 1 ? "seat opens" : "seats open in a row"}
+        </span>
+      </div>
+      <p
+        id="min-adjacent-hint"
+        className={impossible ? styles.blockWarn : styles.blockHint}
+        role={impossible ? "alert" : undefined}
+      >
+        {value === null ? (
+          <>Set to 2 or more to hear only about seats that open side by side.</>
+        ) : impossible ? (
+          ceiling >= 2 ? (
+            <>
+              Your picks could only ever make a block of {ceiling}, so {value}{" "}
+              would never alert you. Pick more adjacent seats, or{" "}
+              <button
+                type="button"
+                className={styles.blockFix}
+                onClick={() => onChange(ceiling)}
+              >
+                use {ceiling}
+              </button>
+              .
+            </>
+          ) : (
+            <>
+              Pick at least two seats next to each other — a block needs
+              neighbours, and nothing in your selection touches.
+            </>
+          )
+        ) : (
+          <>
+            Silent until {value} of your seats are free side by side. Your picks
+            could make a block of up to {ceiling}.
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
+function SignedOutPrompt({ count }: { count: number }): JSX.Element {
+  const ready = count > 0;
   return (
     <div className={styles.signedOut}>
       <p className={styles.signedOutLede}>

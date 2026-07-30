@@ -14,20 +14,42 @@
  *   the SAME state, decided by the first seat: starting on an unselected seat
  *   selects the stroke, starting on a selected seat deselects it. This mirrors
  *   spreadsheet / file-explorer drag-select.
+ * - Click a **row letter** (either gutter) → selects every selectable seat in
+ *   that row, or clears them if they were all already picked (`onBatchPaint`).
+ *   A partly-picked row fills rather than clears, same rule the dashboard's
+ *   group checkboxes use.
+ * - **Select all / Deselect all**, top-left above the grid → the same batch
+ *   call over the whole map. This replaced the old "watch all seats" flag,
+ *   which committed to every seat and showed nothing for it on the map.
  * - Touch keeps tap-to-toggle only, so vertical/horizontal scrolling of the map
  *   still works with a finger.
  *
  * `statusMode="neutral"` is what the watch page uses: one map stands in for
  * every ticked showtime, and their availability genuinely differs, so any
  * Available/Occupied colouring would be a lie for at least one of them. The one
- * exception is `freeAt`, which marks seats already open — a fact that holds
- * regardless of which ticked showtime you have in mind. With a single showtime
- * ticked that reduces to plain "this seat is free", which is why the copy is
- * driven by `multiTimes` rather than hard-coded.
+ * exception is `freeAt`, which warms the fill of seats already open — a fact
+ * that holds regardless of which ticked showtime you have in mind. With a
+ * single showtime ticked that reduces to plain "this seat is free", which is
+ * why the copy is driven by `multiTimes` rather than hard-coded.
+ *
+ * Seat states are deliberately split across two channels so they never have to
+ * compete: **fill** carries what the seat *is* (a seat / free / watched), and
+ * **stroke** carries what you or the room did to it (picked / accessible /
+ * unknown). That is why a free accessible seat can read as both.
  */
-import { useRef, type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 
 import type { RowDetail, SeatDetail, SeatMapLayout } from "@/lib/api";
+import {
+  bulkSelectState,
+  isSelectableSeat,
+  rowPaint,
+  type BulkSelectState,
+} from "@/lib/seatRows";
 import styles from "./SeatMap.module.css";
 
 const CELL_W = 22;
@@ -45,6 +67,10 @@ const BOTTOM_PAD = 16;
 // stays centred. Widen GRID_PAD_X for more breathing room on both sides.
 const ROW_LABEL_X = 24;
 const GRID_PAD_X = 58;
+// Click target around a row letter. A 10px mono glyph is far too small to aim
+// at, so an invisible rect spans the whole gutter up to (but never into) the
+// seat grid — ROW_HIT_W must stay < GRID_PAD_X or it would swallow seat clicks.
+const ROW_HIT_W = 46;
 
 // Pointer must travel this many px before a press becomes a drag-paint (rather
 // than a click). Keeps a slightly-shaky single click from painting two seats.
@@ -87,19 +113,33 @@ interface SeatMapProps {
   statusMode?: "live" | "neutral";
   /**
    * Seat id → the showtime labels where it is already Available. Drives the
-   * marker and the tooltip in neutral mode; ignored in live mode, where the
-   * fill already says it.
+   * warm `.free` fill and the tooltip in neutral mode; ignored in live mode,
+   * where the Available fill already says it.
    */
   freeAt?: ReadonlyMap<string, string[]>;
   /**
    * Whether this neutral map stands in for more than one showtime. Only affects
    * copy: with one time in play "free" needs no qualifier, with several it has
-   * to say *which* — otherwise the marker would claim the seat is open at all
-   * of them.
+   * to say *which* — otherwise the fill would claim the seat is open at all of
+   * them.
    */
   multiTimes?: boolean;
+  /**
+   * Greys the whole map out and switches every input off — used when nothing is
+   * ticked, so there is no showtime the picks could belong to. The map still
+   * renders (the room is worth looking at) but it is explicitly read-only.
+   */
+  dimmed?: boolean;
   /** Set a seat's picked state. Presence of this prop enables selection. */
   onSeatPaint?: (seatId: string, select: boolean) => void;
+  /**
+   * Set a batch of seats to the same picked state — a row-letter click, or the
+   * Select all / Deselect all controls. Separate from `onSeatPaint` so the
+   * parent can apply the batch in a single state update rather than one per
+   * seat: the watch page fans every pick across up to 8 ticked showtimes, so
+   * per-seat would be (times × row width) Map/Set allocations per click.
+   */
+  onBatchPaint?: (seatIds: string[], select: boolean) => void;
 }
 
 function cx(...parts: Array<string | false | null | undefined>): string {
@@ -127,7 +167,9 @@ export function SeatMap({
   statusMode = "live",
   freeAt = NO_FREE,
   multiTimes = false,
+  dimmed = false,
   onSeatPaint,
+  onBatchPaint,
 }: SeatMapProps): JSX.Element {
   const neutral = statusMode === "neutral";
   const cols = layout.total_columns;
@@ -166,7 +208,9 @@ export function SeatMap({
   const handlePointerDown = (e: ReactPointerEvent<HTMLDivElement>): void => {
     // Touch keeps tap-to-toggle (via onClick) so the map can still be scrolled
     // with a finger. Mouse/pen get drag-paint.
-    if (!onSeatPaint || e.pointerType === "touch" || e.button !== 0) return;
+    if (!onSeatPaint || dimmed || e.pointerType === "touch" || e.button !== 0) {
+      return;
+    }
     const hit = seatHit(e.target as Element);
     if (!hit || !hit.interactive) return;
     suppressClickRef.current = false;
@@ -237,9 +281,18 @@ export function SeatMap({
     neutral,
     freeAt,
     multiTimes,
-    enabled: Boolean(onSeatPaint),
+    enabled: Boolean(onSeatPaint) && !dimmed,
     onSeatClick: handleSeatClick,
+    onBatchPaint: dimmed ? undefined : onBatchPaint,
   };
+
+  // --- whole-map selection ------------------------------------------------
+  // Cheap enough to recompute every render (one pass over the seats, ~250 of
+  // them) and always in step with the props, which memoising would have to be
+  // kept honest about by hand.
+  const bulk = interact.enabled && onBatchPaint
+    ? bulkSelectState(layout.rows, watchedIds, selectedIds)
+    : null;
 
   const freeCount = neutral
     ? layout.rows.reduce(
@@ -249,7 +302,10 @@ export function SeatMap({
     : 0;
 
   return (
-    <div className={styles.wrap}>
+    <div className={cx(styles.wrap, dimmed && styles.dimmed)}>
+      {bulk && onBatchPaint ? (
+        <BulkControls state={bulk} onPaint={onBatchPaint} />
+      ) : null}
       <div
         className={styles.scroller}
         ref={scrollerRef}
@@ -265,11 +321,13 @@ export function SeatMap({
           className={styles.svg}
           role="img"
           aria-label={
-            neutral
-              ? multiTimes
-                ? `Seat map: ${seatCount} seats. Availability is not colour-coded because several showtimes are selected; ${freeCount} seats are already open at one of them.`
-                : `Seat map: ${seatCount} seats, ${freeCount} of them already free.`
-              : `Seat map: ${availableCount} of ${seatCount} seats available across ${layout.rows.filter((r) => r.seats.length > 0).length} rows`
+            dimmed
+              ? `Seat map: ${seatCount} seats. No showtime is selected, so seats can't be picked — select a time above.`
+              : neutral
+                ? multiTimes
+                  ? `Seat map: ${seatCount} seats. Availability is not colour-coded because several showtimes are selected; ${freeCount} seats are already open at one of them.`
+                  : `Seat map: ${seatCount} seats, ${freeCount} of them already free.`
+                : `Seat map: ${availableCount} of ${seatCount} seats available across ${layout.rows.filter((r) => r.seats.length > 0).length} rows`
           }
         >
           <defs>
@@ -296,8 +354,69 @@ export function SeatMap({
         showWatched={Boolean(watchedIds && watchedIds.size > 0) || Boolean(onSeatPaint)}
         neutral={neutral}
         multiTimes={multiTimes}
+        dimmed={dimmed}
         freeCount={freeCount}
       />
+    </div>
+  );
+}
+
+/**
+ * Select all / Deselect all, top-left above the grid.
+ *
+ * Two explicit buttons rather than one toggle, because each one says what it
+ * will do — and because the pair replaced the "watch all seats" flag, whose
+ * whole problem was that committing to every seat left the map looking
+ * untouched. These paint real picks, so the room lights up.
+ *
+ * Rendered only when selection is on: a read-only or dimmed map has nothing for
+ * them to act on, and an always-present pair of disabled buttons is clutter.
+ */
+function BulkControls({
+  state,
+  onPaint,
+}: {
+  state: BulkSelectState;
+  onPaint: (seatIds: string[], select: boolean) => void;
+}): JSX.Element | null {
+  const { seatIds, pickedCount } = state;
+  if (seatIds.length === 0) return null;
+  const allPicked = pickedCount === seatIds.length;
+  const remaining = seatIds.length - pickedCount;
+
+  return (
+    <div className={styles.toolbar}>
+      <button
+        type="button"
+        className={styles.toolbarBtn}
+        onClick={() => onPaint(seatIds, true)}
+        disabled={allPicked}
+        title={
+          allPicked
+            ? "Every selectable seat is already picked"
+            : `Pick ${remaining} more ${remaining === 1 ? "seat" : "seats"}`
+        }
+      >
+        Select all
+      </button>
+      <button
+        type="button"
+        className={styles.toolbarBtn}
+        onClick={() => onPaint(seatIds, false)}
+        disabled={pickedCount === 0}
+        title={
+          pickedCount === 0
+            ? "Nothing picked yet"
+            : `Clear ${pickedCount} picked ${pickedCount === 1 ? "seat" : "seats"}`
+        }
+      >
+        Deselect all
+      </button>
+      {/* The one number worth showing: how big "all" actually is. Seats already
+          committed to a watch aren't in it — neither button can move them. */}
+      <span className={styles.toolbarCount}>
+        {pickedCount} / {seatIds.length} picked
+      </span>
     </div>
   );
 }
@@ -345,9 +464,21 @@ interface SeatInteract {
   freeAt?: ReadonlyMap<string, string[]>;
   /** True when the neutral map stands in for more than one showtime. */
   multiTimes?: boolean;
-  /** Whether selection is enabled (onSeatPaint was provided). */
+  /** Whether selection is enabled (onSeatPaint was provided, and not dimmed). */
   enabled?: boolean;
   onSeatClick?: (seat: SeatDetail) => void;
+  onBatchPaint?: (seatIds: string[], select: boolean) => void;
+}
+
+/**
+ * Whether a seat accepts input here: the shared `isSelectableSeat` rule, plus
+ * this map's own on/off switch. Same rule the row-letter click resolves against
+ * (`lib/seatRows.ts:rowPaint`), so a row click can never try to paint a seat the
+ * rect itself would refuse.
+ */
+function isSeatInteractive(seat: SeatDetail, interact: SeatInteract): boolean {
+  if (!interact.enabled) return false;
+  return isSelectableSeat(seat, interact.watchedIds);
 }
 
 /** "3:00 PM", "3:00 PM and 7:00 PM", "3:00 PM, 7:00 PM and 11:00 PM". */
@@ -367,26 +498,78 @@ function renderRow(
     return null;
   }
   const centerY = y + height / 2;
+
+  // --- row-letter click ---------------------------------------------------
+  // `null` when the row offers nothing selectable (all locked, all unknown) —
+  // then no affordance is rendered at all, rather than a dead target.
+  const rowIntent =
+    interact.enabled && interact.onBatchPaint
+      ? rowPaint(row.seats, interact.watchedIds, interact.selectedIds)
+      : null;
+  const onBatchPaint = interact.onBatchPaint;
+  const rowEnabled = rowIntent !== null;
+  const paintRow = (): void => {
+    if (!rowIntent || !onBatchPaint) return;
+    onBatchPaint(rowIntent.seatIds, rowIntent.select);
+  };
+  const onRowKeyDown = (e: ReactKeyboardEvent<SVGGElement>): void => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault(); // Space would otherwise scroll the page
+    paintRow();
+  };
+  // Only the left letter is a keyboard target. The right one is a duplicate for
+  // reading long rows, and making both focusable would put two tab stops per row
+  // in front of a panel a keyboard user is trying to reach.
+  const rowLabelProps = (primary: boolean): Record<string, unknown> => {
+    if (!rowEnabled) return {};
+    return {
+      className: styles.rowLabelBtn,
+      onClick: paintRow,
+      ...(primary
+        ? {
+            onKeyDown: onRowKeyDown,
+            role: "button",
+            tabIndex: 0,
+            "aria-label": `${rowIntent?.select ? "Select" : "Clear"} every seat in row ${row.label}`,
+          }
+        : { "aria-hidden": true }),
+    };
+  };
+
+  const rowLabel = (
+    x: number,
+    anchor: "start" | "end",
+    primary: boolean,
+  ): JSX.Element => (
+    <g {...rowLabelProps(primary)}>
+      {/* Invisible, generously-sized hit area: a 10px glyph is not a target.
+          `fill: transparent` still hit-tests (unlike `fill: none`). */}
+      {rowEnabled ? (
+        <rect
+          x={anchor === "end" ? 0 : totalW - ROW_HIT_W}
+          y={y - 2}
+          width={ROW_HIT_W}
+          height={height + 4}
+          rx={3}
+          className={styles.rowHit}
+        />
+      ) : null}
+      <text
+        x={x}
+        y={centerY}
+        textAnchor={anchor}
+        dominantBaseline="central"
+        className={styles.rowLabel}
+      >
+        {row.label}
+      </text>
+    </g>
+  );
+
   return (
     <g key={row.number}>
-      <text
-        x={ROW_LABEL_X}
-        y={centerY}
-        textAnchor="end"
-        dominantBaseline="central"
-        className={styles.rowLabel}
-      >
-        {row.label}
-      </text>
-      <text
-        x={totalW - ROW_LABEL_X}
-        y={centerY}
-        textAnchor="start"
-        dominantBaseline="central"
-        className={styles.rowLabel}
-      >
-        {row.label}
-      </text>
+      {rowLabel(ROW_LABEL_X, "end", true)}
+      {rowLabel(totalW - ROW_LABEL_X, "start", false)}
       {row.seats.map((seat) => (
         <Seat
           key={seat.id}
@@ -421,7 +604,7 @@ function Seat({
   const isWatched = interact.watchedIds?.has(seat.id) ?? false;
   const justOpened = interact.flashIds?.has(seat.id) ?? false;
   const isFlashing = !neutral && justOpened;
-  const isInteractive = Boolean(interact.enabled) && !isUnknown && !isWatched;
+  const isInteractive = isSeatInteractive(seat, interact);
   // Only meaningful in neutral mode: in live mode the fill already says it.
   const freeLabels = neutral ? interact.freeAt?.get(seat.id) : undefined;
   const isFree = Boolean(freeLabels && freeLabels.length > 0);
@@ -442,14 +625,23 @@ function Seat({
   const className = cx(
     styles.seat,
     stateClass,
+    // Free is a *fill* — the one visual channel not already spoken for. Picked,
+    // watching, accessible and unknown all live on the stroke, so `.free` never
+    // has to compete with any of them, and a free accessible seat reads as
+    // both. `.selected` / `.watched` outrank it on specificity, which is right:
+    // what you did with a seat matters more than what it already was.
+    isFree && styles.free,
     isSpecial && styles.special,
     isSelected && styles.selected,
     isWatched && styles.watched,
     isFlashing && styles.flashing,
+    // Neutral mode can't flash the *status* (it isn't claiming one), so a live
+    // Occupied → Available settles into the free fill instead.
+    neutral && justOpened && isFree && styles.freeFlash,
     isInteractive && styles.interactive,
   );
 
-  // With one showtime in play "free" stands alone; with several the marker has
+  // With one showtime in play "free" stands alone; with several the tooltip has
   // to name which ones, or it would read as "open at all of them".
   const freeNote = !isFree
     ? null
@@ -489,27 +681,22 @@ function Seat({
     </rect>
   );
 
-  // The solid gold fill already says "watching" on its own, and a gold "free"
-  // dot on a gold seat would be invisible anyway — so watched seats carry no
-  // marker. The free-right-now fact survives in the tooltip.
+  // The warm fill and the dot say the same thing together. A watched seat is
+  // solid brass, so a brass dot on it would be invisible anyway — and the fill
+  // already says "watching" on its own.
   if (!isFree || isWatched) return rect;
-
-  const mark = cx(
-    styles.freeMark,
-    neutral && justOpened && styles.freeMarkFlash,
-  );
 
   return (
     <>
       {rect}
-      {/* `pointer-events: none` keeps the marker out of hit-testing, so both the
+      {/* `pointer-events: none` keeps the dot out of hit-testing, so both the
           click handler and the drag-paint's elementFromPoint still resolve to
           the rect underneath — and the rect's <title> still wins the tooltip. */}
       <circle
         cx={x + CELL_W / 2}
         cy={y + CELL_H / 2}
-        r={2.6}
-        className={mark}
+        r={2.4}
+        className={styles.freeMark}
       />
     </>
   );
@@ -522,6 +709,7 @@ function SeatLegend({
   showWatched,
   neutral,
   multiTimes,
+  dimmed,
   freeCount,
 }: {
   total: number;
@@ -530,6 +718,7 @@ function SeatLegend({
   showWatched: boolean;
   neutral: boolean;
   multiTimes: boolean;
+  dimmed: boolean;
   freeCount: number;
 }): JSX.Element {
   return (
@@ -591,8 +780,17 @@ function SeatLegend({
           in neutral mode the layout is a stand-in and its statuses belong to
           whichever showtime happened to supply it. With several times ticked an
           open/taken split would be meaningless, so only the free count is shown;
-          with one, "taken" is exactly the rest of the room. */}
-      {neutral ? (
+          with one, "taken" is exactly the rest of the room. With *none* there is
+          no availability to report at all — and "0 free / N taken" would be a
+          false claim, dimmed or not — so it states only the size of the room. */}
+      {dimmed ? (
+        <div className={styles.tally}>
+          <span className={styles.tallyNumber}>{total}</span>
+          <span className={styles.tallyLabel}>seats</span>
+          <span className={styles.tallyDot} aria-hidden="true" />
+          <span className={styles.tallyDim}>no showtime selected</span>
+        </div>
+      ) : neutral ? (
         <div className={styles.tally}>
           <span className={styles.tallyNumber}>{freeCount}</span>
           {multiTimes ? (

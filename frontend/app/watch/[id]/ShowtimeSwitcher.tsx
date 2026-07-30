@@ -37,7 +37,10 @@ interface Props {
   /** The set's shared day, taken from the anchor's local start. */
   dayLabel: string | null;
   options: SwitcherOption[];
-  /** The showtimes every pick applies to. Never empty. */
+  /**
+   * The showtimes every pick applies to. May be empty — unticking everything is
+   * a valid state that puts the map into a read-only, greyed-out preview.
+   */
   ticked: ReadonlySet<number>;
   onToggleTicked: (showtimeId: number) => void;
   /** Showtimes whose seat data is currently being fetched. */
@@ -136,6 +139,10 @@ export function ShowtimeSwitcher({
             )}
             .
           </p>
+          <p className={styles.infoP}>
+            Untick every time to grey the map out and just look around — your
+            picks come back when you tick a time again.
+          </p>
         </div>
       ) : null}
 
@@ -145,15 +152,12 @@ export function ShowtimeSwitcher({
           const isTicked = ticked.has(opt.showtime_id);
           const isLoading = loadingIds.has(opt.showtime_id);
           const isError = errorIds.has(opt.showtime_id);
-          // Something always has to be in play, so the last ticked time can't be
-          // unticked. To swap showings, tick the new one first.
-          const isLocked = isTicked && tickedCount === 1;
 
           const label = `${time}${opt.isAnchor ? " (the time you pasted)" : ""}${
             isTicked ? ", included" : ", not included"
-          }${isLocked ? " — at least one time has to stay selected" : ""}${
-            opt.watching ? ", already watching" : ""
-          }${opt.isSoldOut ? ", sold out" : ""}`;
+          }${opt.watching ? ", already watching" : ""}${
+            opt.isSoldOut ? ", sold out" : ""
+          }`;
 
           return (
             <li key={opt.showtime_id}>
@@ -163,20 +167,13 @@ export function ShowtimeSwitcher({
                   styles.chip,
                   isTicked ? styles.chipActive : "",
                   isTicked ? styles.chipPicked : "",
-                  isLocked ? styles.chipLocked : "",
                 ]
                   .filter(Boolean)
                   .join(" ")}
-                onClick={() => {
-                  if (!isLocked) onToggleTicked(opt.showtime_id);
-                }}
+                onClick={() => onToggleTicked(opt.showtime_id)}
                 role="checkbox"
                 aria-checked={isTicked}
-                aria-disabled={isLocked ? true : undefined}
                 aria-label={label}
-                title={
-                  isLocked ? "At least one time has to stay selected" : undefined
-                }
               >
                 <span className={styles.tick} aria-hidden="true">
                   {isTicked ? "✓" : ""}
@@ -217,10 +214,12 @@ export function ShowtimeSwitcher({
         </p>
       ) : null}
 
-      <p className={styles.hint}>
-        {tickedCount === 1
-          ? "Tick another time to watch the same seats there too."
-          : `Every seat you pick applies to all ${tickedCount} ticked times.`}
+      <p className={tickedCount === 0 ? styles.hintQuiet : styles.hint}>
+        {tickedCount === 0
+          ? "No times selected — tick one to start picking seats."
+          : tickedCount === 1
+            ? "Tick another time to watch the same seats there too."
+            : `Every seat you pick applies to all ${tickedCount} ticked times.`}
       </p>
     </section>
   );

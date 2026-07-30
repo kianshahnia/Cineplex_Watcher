@@ -205,6 +205,15 @@
   border-color: var(--brass-soft);
 }
 
+/* The overflow chip is a count, not a seat — so it drops the brass entirely
+   and reads as chrome. Same call the dashboard card's `+N` chip makes. */
+.seatChipMore {
+  color: var(--silver-dim);
+  border-color: var(--hair-strong);
+  border-style: dashed;
+  cursor: default;
+}
+
 .hint {
   margin: 4px 0 0;
   font-family: var(--font-sans);
@@ -214,76 +223,9 @@
   max-width: 38ch;
 }
 
-/* --- watch all seats (single primary choice) ------------------------ */
-
-.watchAllBtn {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 14px;
-  align-items: center;
-  text-align: left;
-  width: 100%;
-  padding: 16px 18px;
-  background: rgba(6, 10, 20, 0.45);
-  border: 1px solid var(--hair-strong);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: border-color 200ms ease, background 200ms ease;
-}
-
-.watchAllBtn:hover {
-  border-color: var(--brass-dim);
-  background: rgba(200, 168, 107, 0.06);
-}
-
-.watchAllBtnActive {
-  border-color: var(--brass);
-  background: rgba(200, 168, 107, 0.12);
-}
-
-.watchAllMark {
-  width: 30px;
-  height: 30px;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 16px;
-  font-weight: 500;
-  color: var(--brass-soft);
-  border: 1px solid var(--hair-brass);
-  background: rgba(6, 10, 20, 0.5);
-  transition: background 200ms ease, color 200ms ease, border-color 200ms ease;
-}
-
-.watchAllBtnActive .watchAllMark {
-  background: var(--brass);
-  color: var(--ink);
-  border-color: var(--brass);
-}
-
-.watchAllCopy {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.watchAllTitle {
-  font-family: var(--font-sans);
-  font-size: 15px;
-  font-weight: 500;
-  color: var(--mist);
-}
-
-.watchAllSub {
-  font-family: var(--font-sans);
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--silver);
-}
-
-/* --- "all seats" summary box ---------------------------------------- */
+/* --- legacy "all seats" summary box ---------------------------------- */
+/* Only reachable for watches created before Select all replaced the
+   `notify_any_seat` toggle (bugs.md #12). Nothing sets the flag any more. */
 
 .allBox {
   display: flex;
@@ -328,25 +270,33 @@
   color: var(--silver);
 }
 
-/* --- "or pick your own" divider ------------------------------------- */
+/* --- nothing ticked -------------------------------------------------- */
+/* Sits where the selection summary would, so the panel keeps its shape when the
+   map goes grey. Quieter than `.allBox` — this is a dead end, not a state. */
 
-.orRule {
+.emptyBox {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--silver-dim);
+  flex-direction: column;
+  gap: 8px;
+  padding: 20px 22px;
+  border: 1px dashed var(--hair-strong);
+  border-radius: 8px;
+  background: rgba(6, 10, 20, 0.35);
 }
 
-.orRule::before,
-.orRule::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--hair);
+.emptyTitle {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--silver);
+}
+
+.emptySub {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--silver-dim);
+  max-width: 42ch;
 }
 
 /* --- selection summary ---------------------------------------------- */
@@ -374,6 +324,105 @@
 .clearLink:hover {
   color: var(--platinum);
   border-bottom-color: var(--silver-deep);
+}
+
+/* --- adjacent-seat alert threshold ----------------------------------- */
+/* Sits directly under the primary CTA: it qualifies what that button will do,
+   so it reads as a footnote to the commit rather than a third column of its
+   own. The row is deliberately a sentence with a field in the middle — "Notify
+   only when [4] seats open in a row" — because the number means nothing without
+   the words either side of it, and a labelled box would separate them. */
+
+.blockField {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--hair);
+}
+
+.blockRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.blockLabel {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  letter-spacing: 0.01em;
+  color: var(--silver);
+}
+
+/* Sized to two digits and no more: the value is capped at 20, and a wide box
+   invites the impression that some longer input belongs here. */
+.blockInput {
+  width: 62px;
+  padding: 7px 8px 7px 10px;
+  background: rgba(11, 19, 34, 0.7);
+  border: 1px solid var(--hair-strong);
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 14.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--mist);
+  text-align: center;
+  transition: border-color 200ms ease, background 200ms ease, color 200ms ease;
+}
+
+.blockInput:focus {
+  outline: none;
+  border-color: var(--platinum);
+  background: rgba(16, 25, 44, 0.85);
+}
+
+.blockInput:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* The one error state in the panel. Reddish rather than brass because brass is
+   the accent for things going right, and this is the only place the panel tells
+   the user their setting cannot work. */
+.blockInputBad,
+.blockInputBad:focus {
+  border-color: #d97676;
+  color: #eab6b6;
+}
+
+.blockHint,
+.blockWarn {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.55;
+  max-width: 46ch;
+}
+
+.blockHint {
+  color: var(--silver-dim);
+}
+
+.blockWarn {
+  color: #d97676;
+}
+
+/* Inline "use 2" escape hatch, so the fix is one click from the complaint. */
+.blockFix {
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  color: #eab6b6;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(234, 182, 182, 0.4);
+  transition: color 180ms ease, border-color 180ms ease;
+}
+
+.blockFix:hover {
+  color: var(--mist);
+  border-bottom-color: var(--mist);
 }
 
 /* --- cross-showtime note -------------------------------------------- */

@@ -2,6 +2,73 @@
   display: flex;
   flex-direction: column;
   gap: 24px;
+  transition: opacity 260ms ease, filter 260ms ease;
+}
+
+/* Nothing is ticked, so there is no showtime the picks could belong to. The room
+   still renders — it's worth looking at — but it is visibly out of play. Desaturated
+   as well as dimmed, so the brass accents don't survive the fade and read as
+   still-live state. */
+.dimmed {
+  opacity: 0.42;
+  filter: saturate(0.25);
+}
+
+.dimmed .scroller {
+  pointer-events: none;
+}
+
+/* --- select all / deselect all ---------------------------------------- */
+/* Sits at the top-left of the map, above the grid. Deliberately quiet: two
+   small outlined pills, no brass fill — they are a shortcut for something the
+   user can already do by hand, not the primary action, and the seats lighting
+   up is the real feedback. */
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  /* Pulls the row up tight under the switcher above, so the controls read as
+     belonging to the map rather than floating between the two. */
+  margin-bottom: -12px;
+}
+
+.toolbarBtn {
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid var(--hair-strong);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--silver-dim);
+  cursor: pointer;
+  transition:
+    color 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease;
+}
+
+.toolbarBtn:hover:not(:disabled) {
+  color: var(--brass);
+  border-color: var(--hair-brass);
+  background: rgba(200, 168, 107, 0.07);
+}
+
+.toolbarBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.toolbarCount {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--silver-deep);
+  font-variant-numeric: tabular-nums;
 }
 
 /* horizontal-scrollable container with soft edge fades */
@@ -64,6 +131,38 @@
   letter-spacing: 0.06em;
   fill: var(--silver-dim);
   font-variant-numeric: tabular-nums;
+  transition: fill 180ms ease;
+}
+
+/* Click the row letter to take the whole row. The letter itself is the visible
+   affordance; the hit area behind it is what you actually aim at. */
+.rowLabelBtn {
+  cursor: pointer;
+}
+
+.rowHit {
+  fill: transparent;
+  stroke: none;
+  transition: fill 180ms ease;
+}
+
+.rowLabelBtn:hover .rowLabel,
+.rowLabelBtn:focus-visible .rowLabel {
+  fill: var(--brass);
+}
+
+.rowLabelBtn:hover .rowHit {
+  fill: rgba(200, 168, 107, 0.09);
+}
+
+.rowLabelBtn:focus {
+  outline: none;
+}
+
+.rowLabelBtn:focus-visible .rowHit {
+  fill: rgba(200, 168, 107, 0.09);
+  stroke: var(--brass);
+  stroke-width: 1;
 }
 
 /* seats */
@@ -105,31 +204,47 @@
 }
 
 /* The one fact that is true across every ticked showtime: this seat is already
-   open at (at least) one of them. Hover names which — see the rect's <title>. */
+   open at (at least) one of them. Hover names which — see the rect's <title>.
+
+   A warm wash rather than a brass dot or a thin brass outline (bugs.md #13
+   offered both). Fill is the only channel left: picked is a 2px brass stroke,
+   watching is a solid brass fill with a brass-soft stroke, accessible is a 1px
+   brass-dim stroke and unknown is a dashed one — a fourth stroke weight on a
+   22×18px rect would be unreadable, and it would collide head-on with the
+   accessible outline. Because this sets fill ONLY, a free accessible seat reads
+   as both, and `.selected` / `.watched` still win on specificity below. */
+.free {
+  fill: rgba(200, 168, 107, 0.3);
+}
+
+/* The fill and the dot carry the same fact together — the fill is what reads at
+   a glance across the whole room, the dot is what pins an individual seat. */
 .freeMark {
   fill: var(--brass);
   pointer-events: none;
 }
 
-/* A live Occupied → Available event landed on this seat: the marker appears,
-   and this pulse is what makes the appearance impossible to miss. The seat
-   itself can't flash here — a neutral map isn't claiming a status. */
-.freeMarkFlash {
-  animation: markPop 2.4s cubic-bezier(0.16, 1, 0.3, 1) 1;
-  transform-origin: center;
-  transform-box: fill-box;
+/* A live Occupied → Available event landed on this seat: it flares brass and
+   settles into the free wash, so the change is impossible to miss. The neutral
+   map still isn't claiming a *status* — it is showing the one fact it does
+   state (this seat is free) arriving. */
+.freeFlash {
+  animation: freeSettle 2.4s cubic-bezier(0.16, 1, 0.3, 1) 1;
 }
 
-@keyframes markPop {
+@keyframes freeSettle {
   0% {
-    filter: drop-shadow(0 0 7px rgba(200, 168, 107, 0.85));
-    transform: scale(2.2);
+    fill: var(--brass);
+    filter: drop-shadow(0 0 6px rgba(200, 168, 107, 0.7));
+    transform: scale(1.18);
   }
   35% {
-    filter: drop-shadow(0 0 4px rgba(200, 168, 107, 0.5));
-    transform: scale(1.4);
+    fill: var(--brass-soft);
+    filter: drop-shadow(0 0 3px rgba(200, 168, 107, 0.42));
+    transform: scale(1.06);
   }
   100% {
+    fill: rgba(200, 168, 107, 0.3);
     filter: none;
     transform: scale(1);
   }
@@ -159,9 +274,14 @@
 }
 
 /* Previews the pick. Excluded on an already-picked seat, where filling it in
-   would read as "more selected" rather than "click to drop this one". */
+   would read as "more selected" rather than "click to drop this one".
+
+   Deliberately brighter than `.free` (0.3) — otherwise hovering an already-free
+   seat would change nothing but the stroke, and free seats are the ones people
+   hover most (they're the ones with something to say in the tooltip). Three
+   classes deep, so it outranks `.free` without needing to come after it. */
 .interactive.neutral:not(.selected):hover {
-  fill: rgba(200, 168, 107, 0.28);
+  fill: rgba(200, 168, 107, 0.48);
   stroke: var(--brass);
   stroke-width: 1.5;
 }
@@ -283,14 +403,17 @@
   box-sizing: border-box;
 }
 
+/* Same hairline as .chipNeutral, only the fill differs — which is exactly the
+   distinction the map makes, so the two chips sitting side by side in the
+   legend teach it. */
 .chipFree {
   background:
     radial-gradient(
       circle at 50% 50%,
-      var(--brass) 0 2.6px,
-      transparent 2.7px 100%
+      var(--brass) 0 2.4px,
+      transparent 2.5px 100%
     ),
-    rgba(214, 219, 228, 0.13);
+    rgba(200, 168, 107, 0.3);
   border: 1px solid var(--hair-strong);
   box-sizing: border-box;
 }

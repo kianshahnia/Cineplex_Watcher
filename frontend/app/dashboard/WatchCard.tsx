@@ -11,22 +11,23 @@ import styles from "./WatchCard.module.css";
 
 interface Props {
   watch: Watch;
-  onCancel: (w: Watch) => void;
-  cancelling: boolean;
-  /** Permanently delete the watch (hard delete, any status). */
-  onRemove: (w: Watch) => void;
-  removing: boolean;
+  /**
+   * Permanently delete the watch — the card's only destructive action.
+   *
+   * Cancel (soft archive) and Remove (hard delete) used to be two buttons; they
+   * are one now, labelled "Cancel", and there is no confirmation. See
+   * `docs/bugs.md` #8 / #9.
+   */
+  onDelete: (w: Watch) => void;
+  deleting: boolean;
   /** Rename the watch. Resolves on success, rejects so the editor stays open. */
   onRename: (w: Watch, name: string | null) => Promise<void>;
   renaming: boolean;
+  /** Edit mode: show the corner checkbox. */
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (w: Watch) => void;
 }
-
-const STATUS_COPY: Record<Watch["status"], { label: string; tone: string }> = {
-  active: { label: "Active", tone: "live" },
-  fulfilled: { label: "Fulfilled", tone: "good" },
-  cancelled: { label: "Cancelled", tone: "muted" },
-  expired: { label: "Expired", tone: "muted" },
-};
 
 /** Pass an offset-less wall clock — see the note in WatchHeader.tsx. */
 function formatShowtime(iso: string | null): string | null {
@@ -60,14 +61,23 @@ function sortLabels(labels: string[]): string[] {
 
 export function WatchCard({
   watch,
-  onCancel,
-  cancelling,
-  onRemove,
-  removing,
+  onDelete,
+  deleting,
   onRename,
   renaming,
+  selectable = false,
+  selected = false,
+  onToggleSelect,
 }: Props): JSX.Element {
-  const { showtime, status, name, notify_any_seat, seats, created_at } = watch;
+  const {
+    showtime,
+    status,
+    name,
+    notify_any_seat,
+    min_adjacent_seats,
+    seats,
+    created_at,
+  } = watch;
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -82,14 +92,13 @@ export function WatchCard({
   // the badges component re-applies the suppression rule itself.
   const hasFormats =
     filterExperienceTypes(showtime.experience_types, displayName).length > 0;
-  const statusInfo = STATUS_COPY[status];
 
   const seatLabels = sortLabels(seats.map((s) => s.seat_label));
   const notifiedCount = seats.filter((s) => s.notified_at !== null).length;
   const slug = `${showtime.theatre_id}-${showtime.showtime_id}`;
 
   const isActive = status === "active";
-  const busy = cancelling || removing;
+  const busy = deleting;
 
   function startEditing(): void {
     setDraft(name ?? "");
@@ -108,17 +117,35 @@ export function WatchCard({
 
   return (
     <article
-      className={`${styles.card} ${isActive ? styles.cardActive : ""}`}
+      className={[
+        styles.card,
+        isActive ? styles.cardActive : "",
+        selectable && selected ? styles.cardSelected : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
       data-status={status}
     >
-      <div className={styles.topRow}>
-        <span
-          className={`${styles.statusPill} ${styles[`status_${statusInfo.tone}`]}`}
-        >
-          <span className={styles.statusDot} aria-hidden="true" />
-          {statusInfo.label}
-        </span>
-      </div>
+      {/* The status pill that used to live here is gone (docs/bugs.md #14): with
+          two tabs and no `fulfilled`, a card's status is whichever tab you are
+          looking at, so the pill only repeated it. What carries the difference
+          now is the wash on non-active cards + the brass top edge on active
+          ones. The row itself renders only in edit mode — an empty flex box
+          would still take the card's 16px gap. */}
+      {selectable ? (
+        <div className={styles.topRow}>
+          <button
+            type="button"
+            className={`${styles.selectBox} ${selected ? styles.selectBoxOn : ""}`}
+            role="checkbox"
+            aria-checked={selected}
+            aria-label={`Select ${displayName}`}
+            onClick={() => onToggleSelect?.(watch)}
+          >
+            <span aria-hidden="true">{selected ? "✓" : ""}</span>
+          </button>
+        </div>
+      ) : null}
 
       {editing ? (
         <div className={styles.renameRow}>
@@ -208,11 +235,28 @@ export function WatchCard({
                   ? "1 seat watched"
                   : `${seatLabels.length} seats watched`}
               </span>
-              {notifiedCount > 0 ? (
-                <span className={styles.notifiedTag}>
-                  {notifiedCount} notified
-                </span>
-              ) : null}
+              {/* Grouped, so the row stays "label ......... tags" however many
+                  of them there are — `space-between` with three loose children
+                  would strand the first one in the middle. */}
+              <span className={styles.seatsTags}>
+                {/* The alert rule belongs next to the seat count, not in the meta
+                    row: it changes what "N seats watched" will actually notify
+                    you about, and read on its own up there it would look like
+                    another format badge. */}
+                {min_adjacent_seats !== null ? (
+                  <span
+                    className={styles.blockTag}
+                    title={`Only alerts when ${min_adjacent_seats} of these seats are free side by side`}
+                  >
+                    {min_adjacent_seats} in a row
+                  </span>
+                ) : null}
+                {notifiedCount > 0 ? (
+                  <span className={styles.notifiedTag}>
+                    {notifiedCount} notified
+                  </span>
+                ) : null}
+              </span>
             </div>
             <ul className={styles.chipList}>
               {seatLabels.slice(0, 14).map((label) => (
@@ -245,26 +289,18 @@ export function WatchCard({
             <span className={styles.viewBtnShort}>Seat map</span>
             <span className={styles.arrow} aria-hidden="true">→</span>
           </Link>
-          {isActive ? (
-            <button
-              type="button"
-              className={styles.cancelBtn}
-              onClick={() => onCancel(watch)}
-              disabled={cancelling || removing}
-              aria-busy={cancelling}
-            >
-              {cancelling ? "Cancelling…" : "Cancel"}
-            </button>
-          ) : null}
+          {/* One destructive action, on every card whatever its status. It is
+              a permanent delete and it asks nothing first — see the prop
+              docs above. */}
           <button
             type="button"
-            className={styles.removeBtn}
-            onClick={() => onRemove(watch)}
-            disabled={removing || cancelling}
-            aria-busy={removing}
-            title="Remove this watch permanently"
+            className={styles.cancelBtn}
+            onClick={() => onDelete(watch)}
+            disabled={deleting}
+            aria-busy={deleting}
+            title="Removes this watch permanently"
           >
-            {removing ? "Removing…" : "Remove"}
+            {deleting ? "Removing…" : "Cancel"}
           </button>
         </div>
       </footer>

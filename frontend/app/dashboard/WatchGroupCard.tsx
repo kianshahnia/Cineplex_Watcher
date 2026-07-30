@@ -3,7 +3,7 @@
 import { useId, useState } from "react";
 import type { TransitionEvent } from "react";
 
-import type { Watch, WatchStatus } from "@/lib/api";
+import type { Watch } from "@/lib/api";
 import type { WatchGroup } from "@/lib/watchGrouping";
 import gridStyles from "./Dashboard.module.css";
 import styles from "./WatchGroupCard.module.css";
@@ -20,53 +20,10 @@ interface Props {
    * threading six handlers and three busy flags through a presentational row.
    */
   renderWatch: (w: Watch) => JSX.Element;
-}
-
-/** Fixed order so a mixed summary always reads the same way. */
-const STATUS_ORDER: readonly WatchStatus[] = [
-  "active",
-  "fulfilled",
-  "expired",
-  "cancelled",
-];
-
-const STATUS_LABEL: Record<WatchStatus, string> = {
-  active: "Active",
-  fulfilled: "Fulfilled",
-  expired: "Expired",
-  cancelled: "Cancelled",
-};
-
-interface StatusSummary {
-  text: string;
-  /** The single status every member shares, or null when the group is mixed. */
-  uniform: WatchStatus | null;
-}
-
-/**
- * One pill when every watch shares a status, "3 active · 1 expired" when the All
- * filter mixes them.
- *
- * A collapsed row stands in for everything inside it, so it must never imply a
- * status the group doesn't uniformly hold.
- */
-function statusSummary(counts: Record<WatchStatus, number>): StatusSummary {
-  const present = STATUS_ORDER.filter((s) => counts[s] > 0);
-  const only = present[0];
-  if (present.length === 1 && only !== undefined) {
-    return { text: STATUS_LABEL[only], uniform: only };
-  }
-  return {
-    text: present.map((s) => `${counts[s]} ${s}`).join(" · "),
-    uniform: null,
-  };
-}
-
-/** Matches WatchCard's pill tones so a row and the cards inside it agree. */
-function toneOf(group: WatchGroup, status: StatusSummary): string {
-  if (group.activeCount > 0) return "live";
-  if (status.uniform === "fulfilled") return "good";
-  return "muted";
+  /** Edit mode: show a checkbox that ticks every card in this group at once. */
+  selectable?: boolean;
+  selectState?: "none" | "some" | "all";
+  onToggleSelect?: (watches: readonly Watch[]) => void;
 }
 
 /**
@@ -85,6 +42,9 @@ export function WatchGroupCard({
   expanded,
   onToggle,
   renderWatch,
+  selectable = false,
+  selectState = "none",
+  onToggleSelect,
 }: Props): JSX.Element {
   const id = useId();
 
@@ -99,8 +59,6 @@ export function WatchGroupCard({
   if (expanded && !mounted) setMounted(true);
 
   const count = group.watches.length;
-  const status = statusSummary(group.statusCounts);
-  const tone = toneOf(group, status);
   const seats = seatText(group);
   // The stacked-paper edge only makes sense when there really is a stack behind
   // the row — and only while it's closed.
@@ -120,52 +78,88 @@ export function WatchGroupCard({
       className={`${styles.group} ${group.activeCount > 0 ? styles.groupActive : ""}`}
       aria-labelledby={`${id}-label`}
     >
-      <button
-        type="button"
-        className={`${styles.row} ${stacked ? styles.rowStacked : ""}`}
-        aria-expanded={expanded}
-        aria-controls={`${id}-body`}
-        onClick={() => onToggle(group.key)}
-      >
-        <span
-          className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}
-          aria-hidden="true"
-        >
-          ▸
-        </span>
-
-        <span className={styles.head}>
-          <span id={`${id}-label`} className={styles.label}>
-            {group.label}
-          </span>
-          <span className={styles.count}>×{count}</span>
-        </span>
-
-        <span className={styles.meta}>
-          {group.facets.map((f) => (
-            <span
-              key={f.kind}
-              className={`${styles.facet} ${f.uniform ? "" : styles.facetSpan}`}
-            >
-              {f.text}
-            </span>
-          ))}
-          {seats ? <span className={styles.facet}>{seats}</span> : null}
-        </span>
-
-        <span className={styles.tail}>
-          {group.notifiedCount > 0 ? (
-            <span className={styles.notifiedTag}>
-              {group.notifiedCount} notified
-            </span>
-          ) : null}
-          <span
-            className={`${styles.statusPill} ${styles[`status_${tone}`]}`}
+      {/* The checkbox is a sibling of the row, never a child: the row is itself
+          a <button>, and nesting one inside another is invalid HTML that
+          browsers resolve by dropping the inner control. */}
+      <div className={styles.rowWrap}>
+        {selectable ? (
+          <button
+            type="button"
+            className={[
+              styles.groupSelect,
+              selectState === "all" ? styles.groupSelectOn : "",
+              selectState === "some" ? styles.groupSelectSome : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            role="checkbox"
+            // "mixed" is the ARIA state for a partly-ticked group; reporting
+            // plain `false` would tell a screen-reader user that none of the
+            // four cards inside are selected when two of them are.
+            aria-checked={
+              selectState === "all"
+                ? true
+                : selectState === "some"
+                  ? "mixed"
+                  : false
+            }
+            aria-label={`Select all ${count} in ${group.label}`}
+            onClick={() => onToggleSelect?.(group.watches)}
           >
-            {status.text}
+            <span aria-hidden="true">
+              {selectState === "all" ? "✓" : selectState === "some" ? "–" : ""}
+            </span>
+          </button>
+        ) : null}
+
+        <button
+          type="button"
+          className={`${styles.row} ${stacked ? styles.rowStacked : ""}`}
+          aria-expanded={expanded}
+          aria-controls={`${id}-body`}
+          onClick={() => onToggle(group.key)}
+        >
+          <span className={styles.head}>
+            <span id={`${id}-label`} className={styles.label}>
+              {group.label}
+            </span>
+            <span className={styles.count}>×{count}</span>
           </span>
-        </span>
-      </button>
+
+          <span className={styles.meta}>
+            {group.facets.map((f) => (
+              <span
+                key={f.kind}
+                className={`${styles.facet} ${f.uniform ? "" : styles.facetSpan}`}
+              >
+                {f.text}
+              </span>
+            ))}
+            {seats ? <span className={styles.facet}>{seats}</span> : null}
+          </span>
+
+          <span className={styles.tail}>
+            {group.notifiedCount > 0 ? (
+              <span className={styles.notifiedTag}>
+                {group.notifiedCount} notified
+              </span>
+            ) : null}
+            {/* Where the status pill used to sit (docs/bugs.md #14). The row's
+                own state is the one thing worth stating here now that a card's
+                status is whichever tab you're on — and a right-hand chevron is
+                where the eye looks for it on an accordion, so this replaces the
+                pill rather than sitting alongside the old left-hand one.
+                `aria-expanded` on the button carries the same fact to assistive
+                tech, which is why this is decorative. */}
+            <span
+              className={`${styles.chevron} ${expanded ? styles.chevronOpen : ""}`}
+              aria-hidden="true"
+            >
+              ▸
+            </span>
+          </span>
+        </button>
+      </div>
 
       {/*
         Always rendered so `aria-controls` always resolves to a real element.
