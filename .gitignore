@@ -42,6 +42,7 @@ redisdata/
 docs/
 test_scraper.py
 backend/verify_*.py
+frontend/harness_*.mjs
 CLAUDE.local.md
 docs/context.md
 docs/bugs.md
