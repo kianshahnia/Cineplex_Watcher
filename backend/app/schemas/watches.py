@@ -6,6 +6,15 @@ from pydantic import BaseModel, Field, field_validator
 # Max length mirrors the watches.name column (VARCHAR(120)).
 _NAME_MAX_LEN = 120
 
+#: Upper bound on the adjacent-seat alert threshold.
+#:
+#: Not a database constraint (see migration 006) — a UI-facing limit belongs at
+#: the request boundary, where retuning it costs nothing.  20 is comfortably above
+#: any real group and still bounds the value, and a threshold larger than the
+#: user's seats could ever satisfy is refused by the seat-selection panel before
+#: it gets here (``lib/seatGroups.ts``).
+MAX_ADJACENT_SEATS = 20
+
 
 def _clean_name(value: str | None) -> str | None:
     """Trim a user-supplied watch name; treat blank/whitespace as 'no name'."""
@@ -13,6 +22,21 @@ def _clean_name(value: str | None) -> str | None:
         return None
     cleaned = value.strip()
     return cleaned or None
+
+
+def _clean_min_adjacent_seats(value: int | None) -> int | None:
+    """Normalise the adjacent-seat threshold, collapsing "off" to a single value.
+
+    A threshold of 1 is not a threshold — it says "alert me when any one seat
+    opens", which is exactly the behaviour NULL already means.  Storing both
+    spellings would leave every read site (the poller, the dashboard chip, the
+    panel's prefill) having to remember that ``1`` and ``None`` are the same
+    thing; one of them eventually would not.  So anything below 2 becomes NULL
+    here, and only NULL ever reaches the column as "off".
+    """
+    if value is None:
+        return None
+    return value if value >= 2 else None
 
 
 def _clean_showtime_at(value: datetime | None) -> datetime | None:
@@ -83,6 +107,10 @@ class WatchResponse(BaseModel):
     # nested showtime.showtime_at, which is the (always-NULL) shared metadata.
     showtime_at: datetime | None
     notify_any_seat: bool
+    #: "Only alert me when this many of my seats are free side by side."  NULL =
+    #: off, i.e. alert per seat the moment any watched seat opens.  Only values
+    #: >= 2 exist; see ``_clean_min_adjacent_seats``.
+    min_adjacent_seats: int | None
     # The ORM relationship is named "watched_seats"; we expose it as "seats"
     # in the API to keep the response clean.
     seats: list[WatchedSeatResponse] = Field(validation_alias="watched_seats")
@@ -102,25 +130,33 @@ class CreateWatchRequest(BaseModel):
     notify_any_seat: bool = False
     name: str | None = Field(default=None, max_length=_NAME_MAX_LEN)
     showtime_at: datetime | None = None
+    min_adjacent_seats: int | None = Field(default=None, le=MAX_ADJACENT_SEATS)
 
     _clean_name = field_validator("name")(_clean_name)
     _clean_showtime_at = field_validator("showtime_at")(_clean_showtime_at)
+    _clean_min_adjacent_seats = field_validator("min_adjacent_seats")(
+        _clean_min_adjacent_seats
+    )
 
 
 class UpdateWatchRequest(BaseModel):
-    """Patch a watch's editable fields (name and/or showtime date/time).
+    """Patch a watch's editable fields (name, showtime date/time, alert threshold).
 
-    Both fields are optional and only applied when present in the request body
+    Every field is optional and only applied when present in the request body
     (the router uses ``model_dump(exclude_unset=True)``), so a PATCH that sends
-    only ``name`` leaves ``showtime_at`` untouched and vice-versa. Send a field
-    as ``null`` to explicitly clear it.
+    only ``name`` leaves the others untouched. Send a field as ``null`` to
+    explicitly clear it.
     """
 
     name: str | None = Field(default=None, max_length=_NAME_MAX_LEN)
     showtime_at: datetime | None = None
+    min_adjacent_seats: int | None = Field(default=None, le=MAX_ADJACENT_SEATS)
 
     _clean_name = field_validator("name")(_clean_name)
     _clean_showtime_at = field_validator("showtime_at")(_clean_showtime_at)
+    _clean_min_adjacent_seats = field_validator("min_adjacent_seats")(
+        _clean_min_adjacent_seats
+    )
 
 
 class AddSeatsRequest(BaseModel):
@@ -229,9 +265,16 @@ class FanoutRequest(BaseModel):
     source_showtime_id: int
     notify_any_seat: bool = False
     name: str | None = Field(default=None, max_length=_NAME_MAX_LEN)
+    #: One threshold for the whole batch. The panel shows a single field above a
+    #: single set of picks that every ticked showtime receives, so a per-target
+    #: value would have no way to be set and nothing to mean.
+    min_adjacent_seats: int | None = Field(default=None, le=MAX_ADJACENT_SEATS)
     targets: list[FanoutTargetInput] = Field(min_length=1, max_length=MAX_FANOUT_TARGETS)
 
     _clean_name = field_validator("name")(_clean_name)
+    _clean_min_adjacent_seats = field_validator("min_adjacent_seats")(
+        _clean_min_adjacent_seats
+    )
 
     @field_validator("targets")
     @classmethod

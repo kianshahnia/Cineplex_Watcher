@@ -70,6 +70,7 @@ async def create_watch(
         notify_any_seat=body.notify_any_seat,
         name=body.name,
         showtime_at=body.showtime_at,
+        min_adjacent_seats=body.min_adjacent_seats,
         db=db,
     )
     return WatchDetailResponse(data=WatchResponse.model_validate(watch))
@@ -122,6 +123,7 @@ async def fanout_watches(
         ],
         notify_any_seat=body.notify_any_seat,
         name=body.name,
+        min_adjacent_seats=body.min_adjacent_seats,
         redis=request.app.state.redis,
         db=db,
     )
@@ -217,7 +219,7 @@ async def bulk_rename_watches(
         404: {"model": ErrorResponse},
         429: {"model": ErrorResponse},
     },
-    summary="Update a watch (name and/or showtime date)",
+    summary="Update a watch (name, showtime date, and/or alert threshold)",
 )
 # Per-user — an update is a single UPDATE.  30/min comfortably covers inline
 # editing on the dashboard while blocking scripted loops.
@@ -229,11 +231,12 @@ async def update_watch(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> WatchDetailResponse:
-    """Update a watch's name and/or showtime date (editable any time, any status).
+    """Update a watch's name, showtime date, and/or adjacent-seat alert threshold.
 
-    Only the fields present in the request body are changed — a body of
-    ``{"name": "Dune"}`` leaves the date untouched, and vice-versa. Send a field
-    as ``null`` (or, for the name, an empty string) to clear it.
+    Editable any time, at any status. Only the fields present in the request body
+    are changed — a body of ``{"name": "Dune"}`` leaves the rest untouched. Send a
+    field as ``null`` (or, for the name, an empty string) to clear it; clearing
+    ``min_adjacent_seats`` returns the watch to alerting on each seat.
     """
     # exclude_unset → only fields the client actually sent. Forwarded as kwargs
     # to update_watch, whose _UNSET defaults leave omitted fields alone.

@@ -42,8 +42,8 @@ requests at Cineplex at once.
 8. Enqueue a separate ``tasks.send_notifications`` Celery task with the batch,
    then return. That task (not the poll cycle) does the blocking email/SMS/push
    delivery and, in its own transaction, marks ``notified_at`` / creates
-   ``watched_seats`` rows for ``notify_any_seat`` watches / marks fully-delivered
-   watches ``fulfilled``. Keeping delivery off the poll path stops one popular
+   ``watched_seats`` rows for ``notify_any_seat`` watches / retires fully-delivered
+   watches to ``expired``. Keeping delivery off the poll path stops one popular
    showtime's alert fan-out from stalling every other showtime's poll.
 """
 
@@ -75,6 +75,7 @@ from app.services.notifications import (
     user_wants_push,
     user_wants_sms,
 )
+from app.services import seat_groups
 from app.services.redis_client import (
     SNAPSHOT_TTL_SEC,
     acquire_poll_lock,
@@ -223,6 +224,40 @@ def _build_label_map(seat_layout_json: dict | None) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Adjacent-seat threshold ("only alert me when N seats open together")
+# ---------------------------------------------------------------------------
+
+
+def _wants_groups(watch: Watch) -> bool:
+    """Has this watch asked for block alerts at all?
+
+    Legacy ``notify_any_seat`` watches are excluded whatever their threshold says:
+    they track no fixed seat set, so there is nothing for a block to be made of —
+    every seat in the room would qualify, which is what the flag already means.
+    (Nothing can set that flag any more; watches predating its retirement still
+    carry it.)
+    """
+    return (
+        watch.min_adjacent_seats is not None
+        and watch.min_adjacent_seats >= 2
+        and not watch.notify_any_seat
+    )
+
+
+def _group_threshold(watch: Watch, benches: list[list[str]]) -> int | None:
+    """The block size to enforce for this watch, or None to alert per seat.
+
+    None also covers the one case where the threshold is set but unenforceable —
+    an uncached seat layout, so nothing is known about which seats touch. The
+    caller falls back to per-seat alerts and logs it; see the note at that call
+    site for why falling back beats going quiet.
+    """
+    if not _wants_groups(watch) or not benches:
+        return None
+    return watch.min_adjacent_seats
+
+
+# ---------------------------------------------------------------------------
 # Notification job — plain dataclass so we can build a batch *during* the
 # write-transaction and consume it afterwards (when ORM rows would be
 # detached / refreshed).
@@ -239,6 +274,11 @@ class _CandidateSeat:
     # WatchedSeat row id and just need to set notified_at on it.
     # If this seat surfaced via notify_any_seat, the row doesn't exist yet
     # and we'll create it (with notified_at set) after the email sends.
+    # It is also None for a *bridge* seat in an adjacent-seat block alert — a free
+    # seat the user never picked that completes a block between two they did. Those
+    # get no row: they are named in the message so the block can be booked, but
+    # they are not seats the user chose to watch. The two cases are told apart by
+    # the job's ``min_adjacent_seats``, not by this field.
     watched_seat_id: uuid.UUID | None
 
     def to_dict(self) -> dict:
@@ -292,6 +332,17 @@ class _NotifyJob:
     theatre_id: int
     showtime_id: int
     candidate_seats: list[_CandidateSeat]
+    # The watch's adjacent-seat threshold, or None for an ordinary per-seat alert.
+    # Set means this batch is a *block* alert, which changes three things
+    # downstream: the copy leads with "N seats together", untracked candidates are
+    # bridges and get no watched_seats row, and the watch is not retired on
+    # delivery (a block that breaks and re-forms is worth alerting again).
+    min_adjacent_seats: int | None = None
+    # One entry per qualifying block, each an ordered list of seat labels.  Carries
+    # the grouping the flat ``candidate_seats`` list loses, so the renderers can
+    # say "4 together: G4-G7" instead of just naming four seats.  None on per-seat
+    # alerts, where there is no grouping to report.
+    seat_blocks: list[list[str]] | None = None
 
     def to_dict(self) -> dict:
         """JSON-safe form for the Celery ``send_notifications`` task payload.
@@ -314,6 +365,8 @@ class _NotifyJob:
             "theatre_id": self.theatre_id,
             "showtime_id": self.showtime_id,
             "candidate_seats": [c.to_dict() for c in self.candidate_seats],
+            "min_adjacent_seats": self.min_adjacent_seats,
+            "seat_blocks": self.seat_blocks,
         }
 
     @classmethod
@@ -332,6 +385,12 @@ class _NotifyJob:
             theatre_id=d["theatre_id"],
             showtime_id=d["showtime_id"],
             candidate_seats=[_CandidateSeat.from_dict(c) for c in d["candidate_seats"]],
+            # `.get`, not `[...]`: a job enqueued by the previous release is still
+            # sitting in the broker at deploy time and carries neither key. Reading
+            # them defensively is what lets the worker be restarted without
+            # draining the queue first.
+            min_adjacent_seats=d.get("min_adjacent_seats"),
+            seat_blocks=d.get("seat_blocks"),
         )
 
 
@@ -418,8 +477,9 @@ async def _run_poll_cycle(r) -> None:
     """Run one full poll cycle across active, *watched* showtimes (lock held).
 
     A showtime is only polled if it has at least one **active** watch. A
-    showtime whose watches were all cancelled, removed, expired, or marked
-    ``fulfilled`` still has ``is_active = True`` but nobody is waiting on it, so
+    showtime whose watches were all cancelled, removed, or expired (including the
+    fully-delivered ones retired in :func:`_send_notifications`) still has
+    ``is_active = True`` but nobody is waiting on it, so
     polling it is pure wasted upstream volume (Cineplex request budget is the
     existential constraint — see docs/scaling.md Finding 2). The correlated
     ``EXISTS`` sub-query below drops those from the cycle entirely; if a new
@@ -583,6 +643,10 @@ async def _poll_showtime(r, client: httpx.Client, showtime: Showtime) -> None:
                 changed.append((seat_key, old_status, new_status))
 
     notify_jobs: list[_NotifyJob] = []
+    # Watches that asked for block alerts but couldn't get them because this
+    # showtime's seat layout was never cached. Collected so the (should-be-
+    # impossible) condition is logged once per showtime rather than once per watch.
+    layout_gaps: set[uuid.UUID] = set()
 
     # --- 4. Persist changes to the DB and publish pub/sub events ---
     async with _session_factory() as db:
@@ -639,6 +703,11 @@ async def _poll_showtime(r, client: httpx.Client, showtime: Showtime) -> None:
             # Build label map for pub/sub + email payloads.
             label_map = _build_label_map(db_showtime.seat_layout_json)
 
+            # Physical adjacency, for watches carrying an "N seats together"
+            # threshold. Empty when the layout was never cached — see the
+            # fallback note where it's consumed below.
+            benches = seat_groups.build_benches(db_showtime.seat_layout_json)
+
             for seat_key, old_status, new_status in changed:
                 # Update DB state for any user who is watching this seat.
                 for ws in seat_to_watched.get(seat_key, []):
@@ -691,30 +760,75 @@ async def _poll_showtime(r, client: httpx.Client, showtime: Showtime) -> None:
                     ws.seat_key: ws for ws in watch.watched_seats
                 }
                 candidates: list[_CandidateSeat] = []
+                seat_blocks: list[list[str]] | None = None
 
-                for seat_key in newly_available_keys:
-                    seat_label = label_map.get(seat_key, seat_key)
-                    if seat_key in tracked:
-                        ws = tracked[seat_key]
-                        if ws.notified_at is None:
+                group_size = _group_threshold(watch, benches)
+                if group_size is None and _wants_groups(watch) and not benches:
+                    # Should be unreachable: the seat-map endpoint caches the layout
+                    # the first time anyone opens the page, and fan-out copies it
+                    # onto every sibling it creates. If it does happen we fall back
+                    # to per-seat alerts rather than going silent — an alert that
+                    # ignores the user's threshold is a nuisance, one that never
+                    # arrives loses them the seats.
+                    layout_gaps.add(watch.id)
+
+                if group_size is not None:
+                    # --- block path ---------------------------------------------
+                    # Deliberately reads the *whole* current availability map, not
+                    # just this poll's changes: a block completed by a seat that
+                    # opened four polls ago is exactly the case the per-seat path
+                    # cannot express. Dedup is the prev-vs-new crossing inside
+                    # find_new_blocks, so `notified_at` is not consulted here —
+                    # that is what lets a block that broke and re-formed alert
+                    # again, which is the point of the feature.
+                    blocks = seat_groups.find_new_blocks(
+                        benches,
+                        set(tracked),
+                        prev_statuses,
+                        new_statuses,
+                        group_size,
+                    )
+                    for block in blocks:
+                        for seat_key in block:
+                            ws_row = tracked.get(seat_key)
+                            candidates.append(
+                                _CandidateSeat(
+                                    seat_key=seat_key,
+                                    seat_label=label_map.get(seat_key, seat_key),
+                                    # None => a bridge seat, named in the message
+                                    # but never given a watched_seats row.
+                                    watched_seat_id=ws_row.id if ws_row else None,
+                                )
+                            )
+                    seat_blocks = [
+                        [label_map.get(seat_key, seat_key) for seat_key in block]
+                        for block in blocks
+                    ] or None
+                else:
+                    # --- per-seat path (unchanged) ------------------------------
+                    for seat_key in newly_available_keys:
+                        seat_label = label_map.get(seat_key, seat_key)
+                        if seat_key in tracked:
+                            ws = tracked[seat_key]
+                            if ws.notified_at is None:
+                                candidates.append(
+                                    _CandidateSeat(
+                                        seat_key=seat_key,
+                                        seat_label=seat_label,
+                                        watched_seat_id=ws.id,
+                                    )
+                                )
+                        elif watch.notify_any_seat:
+                            # No watched_seats row yet — we'll create one after
+                            # a successful send so the dedup check works on the
+                            # next cycle.
                             candidates.append(
                                 _CandidateSeat(
                                     seat_key=seat_key,
                                     seat_label=seat_label,
-                                    watched_seat_id=ws.id,
+                                    watched_seat_id=None,
                                 )
                             )
-                    elif watch.notify_any_seat:
-                        # No watched_seats row yet — we'll create one after
-                        # a successful send so the dedup check works on the
-                        # next cycle.
-                        candidates.append(
-                            _CandidateSeat(
-                                seat_key=seat_key,
-                                seat_label=seat_label,
-                                watched_seat_id=None,
-                            )
-                        )
 
                 if candidates:
                     notify_jobs.append(
@@ -745,6 +859,8 @@ async def _poll_showtime(r, client: httpx.Client, showtime: Showtime) -> None:
                             theatre_id=db_showtime.theatre_id,
                             showtime_id=db_showtime.showtime_id,
                             candidate_seats=candidates,
+                            min_adjacent_seats=group_size,
+                            seat_blocks=seat_blocks,
                         )
                     )
 
@@ -756,6 +872,15 @@ async def _poll_showtime(r, client: httpx.Client, showtime: Showtime) -> None:
         db_showtime.poll_interval_sec = new_interval
         db_showtime.last_polled_at = datetime.now(timezone.utc)
         await db.commit()
+
+    if layout_gaps:
+        await log.awarning(
+            "seat_group_layout_missing",
+            showtime_uuid=str(showtime.id),
+            theatre_id=showtime.theatre_id,
+            showtime_id=showtime.showtime_id,
+            watches=len(layout_gaps),
+        )
 
     # --- 5. Persist the new snapshot after a successful DB commit ---
     await r.setex(snapshot_key, SNAPSHOT_TTL_SEC, json.dumps(new_statuses))
@@ -834,6 +959,7 @@ async def _send_notifications(jobs: list[_NotifyJob]) -> None:
                 seat_labels=seat_labels,
                 theatre_id=job.theatre_id,
                 showtime_id=job.showtime_id,
+                seat_blocks=job.seat_blocks,
             )
             attempts.append((job, "email", email_ok))
             any_channel_ok = any_channel_ok or email_ok
@@ -846,6 +972,7 @@ async def _send_notifications(jobs: list[_NotifyJob]) -> None:
                 seat_labels=seat_labels,
                 theatre_id=job.theatre_id,
                 showtime_id=job.showtime_id,
+                seat_blocks=job.seat_blocks,
             )
             attempts.append((job, "sms", sms_ok))
             any_channel_ok = any_channel_ok or sms_ok
@@ -858,6 +985,7 @@ async def _send_notifications(jobs: list[_NotifyJob]) -> None:
                 seat_labels=seat_labels,
                 theatre_id=job.theatre_id,
                 showtime_id=job.showtime_id,
+                seat_blocks=job.seat_blocks,
             )
             attempts.append((job, "push", push_ok))
             any_channel_ok = any_channel_ok or push_ok
@@ -899,7 +1027,7 @@ async def _send_notifications(jobs: list[_NotifyJob]) -> None:
                     ws = await db.get(WatchedSeat, cand.watched_seat_id)
                     if ws is not None and ws.notified_at is None:
                         ws.notified_at = now
-                else:
+                elif job.min_adjacent_seats is None:
                     # notify_any_seat watch — create the row so future polls
                     # treat this seat as "already notified" for this watch.
                     db.add(
@@ -911,31 +1039,56 @@ async def _send_notifications(jobs: list[_NotifyJob]) -> None:
                             notified_at=now,
                         )
                     )
+                # else: a bridge seat inside a block alert — a free seat the user
+                # never picked that completes a block between two they did. It is
+                # named in the message so they can book the whole block, but adding
+                # a row would silently enrol them in watching a seat they didn't
+                # choose (and would show up as a seat chip on their dashboard).
+                # Block alerts don't need the row for dedup anyway: theirs is the
+                # snapshot crossing in find_new_blocks, not notified_at.
 
-        # ---- Mark fully-delivered watches as 'fulfilled' ----
-        # A specific-seat watch whose every tracked seat has now been notified
-        # has nothing left to deliver. Marking it 'fulfilled' drops it from the
-        # active set, so once *all* of a showtime's watches are fulfilled (or
-        # removed) the zero-watch skip in _run_poll_cycle stops polling that
-        # showtime — cutting upstream volume (docs/scaling.md Finding 2). It also
-        # fixes the /admin/stats fulfilled count, which is otherwise always 0.
+        # ---- Retire fully-delivered watches ----
+        # A specific-seat watch whose every tracked seat has now been notified has
+        # nothing left to deliver. Dropping it out of 'active' is what lets the
+        # zero-watch skip in _run_poll_cycle stop polling a showtime once *all* of
+        # its watches are done (or removed) — cutting upstream volume, which is
+        # the existential constraint (docs/scaling.md Finding 2).
+        #
+        # It is marked 'expired', not 'fulfilled'. The 'fulfilled' status was
+        # retired from the product on 2026-07-29 (docs/bugs.md #14/#15): the
+        # dashboard now has exactly two tabs, Active and Expired, and no card
+        # carries a status pill, so a third value had nowhere to surface and read
+        # as a distinction without a difference. The *value* survives in the
+        # column and in every read path for rows written before that date —
+        # retire the write, keep the read, run no destructive migration. Same call
+        # bugs.md #8 made about 'cancelled'.
         #
         # notify_any_seat watches are EXCLUDED: they have no fixed target set, so
         # any future seat release is still worth an alert — they're never "done".
         # The SELECT below autoflushes the notified_at writes above, and the
         # session's identity map means the just-stamped rows report their new
         # notified_at here.
+        #
+        # Watches with an adjacent-seat threshold are excluded for the same reason
+        # in a different shape. Their target is "a block of N", which can be
+        # satisfied more than once: whoever books the block we just alerted about
+        # was competing with this user for it, and the next block — or the same one
+        # re-forming — is worth another alert. Retiring on first delivery would
+        # make the feature strictly worse than the per-seat alerts it replaces.
+        # Cost is that these watches keep polling until the screening starts.
         for watch_id in {job.watch_id for job in sent_jobs}:
             watch = await db.get(Watch, watch_id)
             if watch is None or watch.status != "active" or watch.notify_any_seat:
+                continue
+            if watch.min_adjacent_seats is not None:
                 continue
             seats_result = await db.execute(
                 select(WatchedSeat).where(WatchedSeat.watch_id == watch_id)
             )
             tracked_seats = list(seats_result.scalars().all())
             if tracked_seats and all(s.notified_at is not None for s in tracked_seats):
-                watch.status = "fulfilled"
-                await log.ainfo("watch_fulfilled", watch_uuid=str(watch_id))
+                watch.status = "expired"
+                await log.ainfo("watch_delivered", watch_uuid=str(watch_id))
 
         await db.commit()
 
@@ -974,8 +1127,8 @@ def send_notifications(self, jobs_payload: list[dict]) -> None:
     ``_NotifyJob`` batch from its JSON payload and runs the same async
     send-and-persist logic that used to run inline (:func:`_send_notifications`):
     dispatch every opted-in channel per user, then in a fresh transaction stamp
-    ``notified_at`` / create ``notify_any_seat`` rows / mark watches
-    ``fulfilled``.
+    ``notified_at`` / create ``notify_any_seat`` rows / retire fully-delivered
+    watches to ``expired``.
 
     Splitting this out of the poll task is the whole point: a popular showtime
     releasing a big seat block (many watchers × email+SMS+push, each a blocking

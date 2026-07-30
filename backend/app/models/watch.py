@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,6 +31,14 @@ class Watch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     showtime_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=False), nullable=True
     )
+    # "Only alert me when this many of my seats are free side by side."
+    #
+    # NULL = off, which is the original behaviour: alert per seat, as soon as any
+    # watched seat flips Occupied -> Available. Only values >= 2 engage the block
+    # rule in services/seat_groups.py; the schema layer normalises 1 to NULL so
+    # there is exactly one spelling of "off". Ignored on legacy
+    # ``notify_any_seat`` watches, which have no fixed seat set to form blocks in.
+    min_adjacent_seats: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="watches")  # noqa: F821
     showtime: Mapped["Showtime"] = relationship(back_populates="watches")  # noqa: F821

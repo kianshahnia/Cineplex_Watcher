@@ -111,6 +111,7 @@ async def fan_out_watches(
     name: str | None,
     redis,
     db: AsyncSession,
+    min_adjacent_seats: int | None = None,
 ) -> list[FanoutOutcome]:
     """Apply the given selections to each target showtime, independently.
 
@@ -149,6 +150,7 @@ async def fan_out_watches(
                 anchor=anchor,
                 notify_any_seat=notify_any_seat,
                 name=name,
+                min_adjacent_seats=min_adjacent_seats,
                 db=db,
             )
         )
@@ -173,6 +175,7 @@ async def _apply_target(
     anchor: Showtime,
     notify_any_seat: bool,
     name: str | None,
+    min_adjacent_seats: int | None,
     db: AsyncSession,
 ) -> FanoutOutcome:
     """Run the full per-target algorithm.  Always returns; never raises."""
@@ -254,6 +257,7 @@ async def _apply_target(
             notify_any_seat=notify_any_seat,
             db=db,
             name=name,
+            min_adjacent_seats=min_adjacent_seats,
         )
     except (SQLAlchemyError, HTTPException) as exc:
         # Roll back before returning: the session is shared with every remaining
@@ -360,6 +364,30 @@ async def _seed_target_showtime(
     resolution the first time its page is viewed.
     """
     target = await watch_service.get_or_create_showtime(theatre_id, sibling.showtime_id, db)
+
+    # ---- Seat layout ---------------------------------------------------------
+    # Copied from the anchor, which is safe for the same measured reason the whole
+    # feature is: siblings play in the same auditorium, so their seat maps are
+    # key-for-key identical, and both guards above have already agreed on that for
+    # this target specifically.
+    #
+    # This is not a nicety. `showtimes.seat_layout_json` is only ever populated by
+    # the seat-map endpoint, so a fanned-out target's row stays NULL until somebody
+    # opens its page — and the poller reads that column to work out which seats
+    # touch which (services/seat_groups.build_benches). Without the copy, a
+    # "4 seats together" threshold on a fanned-out showtime could not be evaluated
+    # and would silently fall back to per-seat alerts. Copied (not shared) so a
+    # later in-place edit of one row can't rewrite the other's, matching
+    # `build_sibling_metadata`'s handling of `metadata_json`.
+    if target.seat_layout_json is None and anchor.seat_layout_json is not None:
+        target.seat_layout_json = dict(anchor.seat_layout_json)
+        await db.commit()
+        await log.ainfo(
+            "showtime_layout_seeded_from_sibling",
+            theatre_id=theatre_id,
+            showtime_id=sibling.showtime_id,
+            anchor_showtime_id=anchor.showtime_id,
+        )
 
     if target.movie_name is not None and target.showtime_at is not None:
         # Already fully resolved — a repeat fan-out shouldn't cost a write.

@@ -76,6 +76,34 @@ def _format_showtime(showtime_at: datetime | None) -> str:
     return showtime_at.strftime("%A, %b %d at %I:%M %p")
 
 
+def describe_block(labels: list[str]) -> str:
+    """Name a run of adjacent seats compactly: ``"G4-G7"`` for four, ``"G4"`` for one.
+
+    Endpoints only, because that is how people read a block of seats — "G4 through
+    G7", not four separate labels. Falls back to listing when there are exactly
+    two (``"G4, G5"``), where a dash would imply a range longer than it is.
+    """
+    if not labels:
+        return ""
+    if len(labels) <= 2:
+        return ", ".join(labels)
+    return f"{labels[0]}–{labels[-1]}"
+
+
+def _blocks_phrase(seat_blocks: list[list[str]]) -> str:
+    """"4 seats together (G4-G7)", or "4 together (G4-G7) and 2 together (J1, J2)"."""
+    parts = [
+        f"{len(block)} together ({describe_block(block)})"
+        for block in seat_blocks
+        if block
+    ]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return ", ".join(parts[:-1]) + f" and {parts[-1]}"
+
+
 def build_seat_available_email(
     *,
     movie_name: str | None,
@@ -84,11 +112,19 @@ def build_seat_available_email(
     seat_labels: list[str],
     theatre_id: int,
     showtime_id: int,
+    seat_blocks: list[list[str]] | None = None,
 ) -> RenderedEmail:
     """Render the subject, plaintext body, and HTML body for a seat alert.
 
     ``seat_labels`` may contain one or more labels — the copy adapts
     automatically for singular vs. plural.
+
+    ``seat_blocks`` is set only for a watch with an adjacent-seat threshold, and
+    carries the grouping the flat ``seat_labels`` list cannot express. When
+    present the copy leads with the fact the user actually asked to be told —
+    *how many seats are together* — because "G4, G5, G6, G7 are available" reads
+    identically whether those four are in a row or scattered across the room, and
+    the difference is the entire reason they set a threshold.
     """
     if not seat_labels:
         raise ValueError("seat_labels must contain at least one entry")
@@ -99,11 +135,17 @@ def build_seat_available_email(
     book_url = CINEPLEX_BOOKING_URL.format(theatre_id=theatre_id, showtime_id=showtime_id)
     seats_str = ", ".join(seat_labels)
     plural = "seats are" if len(seat_labels) > 1 else "seat is"
+    blocks_phrase = _blocks_phrase(seat_blocks) if seat_blocks else ""
 
-    subject = f"{movie} — {seats_str} now available"
+    if blocks_phrase:
+        subject = f"{movie} — {blocks_phrase} now available"
+        lede = f"Seats just opened side by side for {movie} — {blocks_phrase}:"
+    else:
+        subject = f"{movie} — {seats_str} now available"
+        lede = f"Good news — the following {plural} now available for {movie}:"
 
     text_lines = [
-        f"Good news — the following {plural} now available for {movie}:",
+        lede,
         "",
         f"  {seats_str}",
         "",
@@ -122,6 +164,11 @@ def build_seat_available_email(
     theater_html = (
         f'<p style="margin:0 0 4px 0;color:#555555;">{escape(theater)}</p>' if theater else ""
     )
+    seats_heading = (
+        f"{escape(blocks_phrase)} — now available:"
+        if blocks_phrase
+        else f"The following {plural} now available:"
+    )
     html_body = f"""<!DOCTYPE html>
 <html>
 <body style="font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;background:#f6f7f9;margin:0;padding:24px;">
@@ -131,7 +178,7 @@ def build_seat_available_email(
       {theater_html}
       <p style="margin:0 0 16px 0;color:#555555;">{escape(when)}</p>
       <p style="margin:0 0 8px 0;color:#111111;font-size:16px;">
-        The following {plural} now available:
+        {seats_heading}
       </p>
       <p style="margin:0 0 20px 0;">{seat_chips}</p>
       <p style="margin:0;">
@@ -164,6 +211,7 @@ def send_seat_available_email(
     seat_labels: list[str],
     theatre_id: int,
     showtime_id: int,
+    seat_blocks: list[list[str]] | None = None,
 ) -> bool:
     """Send a seat-available email via Resend.
 
@@ -183,6 +231,7 @@ def send_seat_available_email(
         seat_labels=seat_labels,
         theatre_id=theatre_id,
         showtime_id=showtime_id,
+        seat_blocks=seat_blocks,
     )
 
     if not settings.resend_api_key:
@@ -233,18 +282,29 @@ def build_seat_available_sms(
     seat_labels: list[str],
     theatre_id: int,
     showtime_id: int,
+    seat_blocks: list[list[str]] | None = None,
 ) -> str:
     """Render the SMS body for a seat alert.
 
     Kept short on purpose — most carriers split anything over 160 chars
     into multiple billable segments. Theater name and full showtime are
     omitted so the message stays in one segment when possible.
+
+    A block alert (``seat_blocks`` set) is *cheaper* to render than a plain one,
+    not more expensive: "4 seats together (G4–G7)" is shorter than listing four
+    labels and says strictly more, so the segment budget improves exactly where
+    the alert covers the most seats.
     """
     if not seat_labels:
         raise ValueError("seat_labels must contain at least one entry")
 
     movie = movie_name or "Cineplex"
     book_url = CINEPLEX_BOOKING_URL.format(theatre_id=theatre_id, showtime_id=showtime_id)
+
+    if seat_blocks:
+        phrase = _blocks_phrase(seat_blocks)
+        if phrase:
+            return f"{movie} - {phrase} now available. Book: {book_url}"
 
     if len(seat_labels) == 1:
         seats_phrase = f"Seat {seat_labels[0]} is now available"
@@ -270,6 +330,7 @@ def send_seat_available_sms(
     seat_labels: list[str],
     theatre_id: int,
     showtime_id: int,
+    seat_blocks: list[list[str]] | None = None,
 ) -> bool:
     """Send a seat-available SMS via Twilio.
 
@@ -290,6 +351,7 @@ def send_seat_available_sms(
         seat_labels=seat_labels,
         theatre_id=theatre_id,
         showtime_id=showtime_id,
+        seat_blocks=seat_blocks,
     )
 
     if not (
@@ -333,6 +395,7 @@ def build_seat_available_push(
     seat_labels: list[str],
     theatre_id: int,
     showtime_id: int,
+    seat_blocks: list[list[str]] | None = None,
 ) -> dict:
     """Render the Web Push payload as a JSON-serialisable dict.
 
@@ -343,8 +406,13 @@ def build_seat_available_push(
             "body":  str,
             "url":   str,             # where to open on click
             "seats": list[str],       # for richer UI if the SW wants it
+            "blocks": list[list[str]] | None,  # adjacent-seat groups, if any
             "tag":   str,             # collapses repeats per showtime
         }
+
+    ``blocks`` is additive — a service worker that ignores it renders exactly what
+    it rendered before. It's included because the grouping is the whole point of a
+    block alert and ``seats`` alone flattens it away.
     """
     if not seat_labels:
         raise ValueError("seat_labels must contain at least one entry")
@@ -352,7 +420,10 @@ def build_seat_available_push(
     movie = movie_name or "Cineplex Watcher"
     book_url = CINEPLEX_BOOKING_URL.format(theatre_id=theatre_id, showtime_id=showtime_id)
 
-    if len(seat_labels) == 1:
+    blocks_phrase = _blocks_phrase(seat_blocks) if seat_blocks else ""
+    if blocks_phrase:
+        body = f"{blocks_phrase} — tap to book."
+    elif len(seat_labels) == 1:
         body = f"Seat {seat_labels[0]} is now available — tap to book."
     else:
         body = f"{len(seat_labels)} seats now available — tap to book."
@@ -362,6 +433,7 @@ def build_seat_available_push(
         "body": body,
         "url": book_url,
         "seats": seat_labels,
+        "blocks": seat_blocks,
         # Same `tag` collapses notifications about the same showtime so the
         # user doesn't accumulate a stack — the latest replaces older ones.
         "tag": f"cineplex-watcher-{theatre_id}-{showtime_id}",
@@ -380,6 +452,7 @@ def send_seat_available_push(
     seat_labels: list[str],
     theatre_id: int,
     showtime_id: int,
+    seat_blocks: list[list[str]] | None = None,
 ) -> bool:
     """Send a Web Push notification via pywebpush.
 
@@ -405,6 +478,7 @@ def send_seat_available_push(
         seat_labels=seat_labels,
         theatre_id=theatre_id,
         showtime_id=showtime_id,
+        seat_blocks=seat_blocks,
     )
 
     if not (settings.vapid_private_key and settings.vapid_claim_email):

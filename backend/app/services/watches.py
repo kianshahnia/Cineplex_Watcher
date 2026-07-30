@@ -81,6 +81,7 @@ async def create_watch(
     db: AsyncSession,
     name: str | None = None,
     showtime_at: datetime | None = None,
+    min_adjacent_seats: int | None = None,
 ) -> Watch:
     """Create a new watch for a user + showtime pair.
 
@@ -91,7 +92,9 @@ async def create_watch(
     user re-watch a showtime they previously stopped watching.
     Reuses the existing Showtime row if another user already created one.
     ``name`` is an optional user-provided label for the watch; ``showtime_at``
-    is the optional user-picked screening date/time (naive, theatre-local).
+    is the optional user-picked screening date/time (naive, theatre-local);
+    ``min_adjacent_seats`` is the "only alert me when N seats are free side by
+    side" threshold (NULL = off, alert per seat).
     """
     showtime = await get_or_create_showtime(theatre_id, showtime_id, db)
 
@@ -120,6 +123,7 @@ async def create_watch(
         existing.notify_any_seat = notify_any_seat
         existing.name = name
         existing.showtime_at = showtime_at
+        existing.min_adjacent_seats = min_adjacent_seats
         await db.commit()
 
         await log.ainfo(
@@ -133,6 +137,7 @@ async def create_watch(
         notify_any_seat=notify_any_seat,
         name=name,
         showtime_at=showtime_at,
+        min_adjacent_seats=min_adjacent_seats,
     )
     db.add(watch)
     await db.commit()
@@ -150,6 +155,7 @@ async def apply_seats_to_showtime(
     notify_any_seat: bool,
     db: AsyncSession,
     name: str | None = None,
+    min_adjacent_seats: int | None = None,
 ) -> tuple[Watch, str]:
     """Ensure the user watches this showtime, with these seats on it.
 
@@ -177,6 +183,14 @@ async def apply_seats_to_showtime(
     so a fan-out silently rewriting them would be a surprise.  Seats are additive
     and idempotent, which is exactly what a fan-out should be.
 
+    ``min_adjacent_seats`` is the deliberate exception: it **is** applied on all
+    three paths.  The seat-selection panel shows one threshold field above one set
+    of picks that every ticked showtime receives, so whatever it reads is what the
+    user believes applies to all of them.  Leaving an already-active target on its
+    old threshold would make the panel a liar about the very rule that decides
+    whether they get alerted at all — a worse surprise than the write.  (The name
+    is different in kind: it is a label, and the dashboard shows each watch's own.)
+
     Returns the reloaded watch plus which of the three paths ran, so the caller
     can report per-target outcomes.
     """
@@ -192,6 +206,8 @@ async def apply_seats_to_showtime(
     if existing is not None and existing.status == "active":
         watch_id = existing.id
         action = "updated"
+        existing.min_adjacent_seats = min_adjacent_seats
+        await db.commit()
     else:
         action = "reactivated" if existing is not None else "created"
         try:
@@ -202,6 +218,7 @@ async def apply_seats_to_showtime(
                 notify_any_seat=notify_any_seat,
                 db=db,
                 name=name,
+                min_adjacent_seats=min_adjacent_seats,
             )
             watch_id = watch.id
         except HTTPException as exc:
@@ -212,7 +229,10 @@ async def apply_seats_to_showtime(
             if exc.status_code != status.HTTP_409_CONFLICT:
                 raise
             result = await db.execute(existing_stmt)
-            watch_id = result.scalar_one().id
+            raced = result.scalar_one()
+            raced.min_adjacent_seats = min_adjacent_seats
+            await db.commit()
+            watch_id = raced.id
             action = "updated"
 
     if seats:
@@ -227,21 +247,24 @@ async def update_watch(
     *,
     name: str | None = _UNSET,
     showtime_at: datetime | None = _UNSET,
+    min_adjacent_seats: int | None = _UNSET,
 ) -> Watch:
-    """Update a watch's editable fields (name and/or showtime date/time).
+    """Update a watch's editable fields (name, showtime date/time, alert threshold).
 
-    Both fields are editable at any time and for any status (e.g. relabelling
-    an old fulfilled watch in history). Each argument defaults to the ``_UNSET``
+    Every field is editable at any time and for any status (e.g. relabelling
+    an old expired watch in history). Each argument defaults to the ``_UNSET``
     sentinel: only the fields actually passed are written, so a name-only update
-    leaves ``showtime_at`` alone and vice-versa. Passing ``None`` explicitly
-    clears that field. Raises 403 if the caller doesn't own it, 404 if it
-    doesn't exist.
+    leaves the others alone. Passing ``None`` explicitly clears that field —
+    for ``min_adjacent_seats`` that means "go back to alerting per seat".
+    Raises 403 if the caller doesn't own it, 404 if it doesn't exist.
     """
     watch = await _get_own_watch(watch_id, user_id, db)
     if name is not _UNSET:
         watch.name = name
     if showtime_at is not _UNSET:
         watch.showtime_at = showtime_at
+    if min_adjacent_seats is not _UNSET:
+        watch.min_adjacent_seats = min_adjacent_seats
     await db.commit()
 
     await log.ainfo("watch_updated", watch_id=str(watch_id), user_id=str(user_id))
